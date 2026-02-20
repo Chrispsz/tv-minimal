@@ -24,6 +24,7 @@ class PlayerActivity : Activity() {
     private var player: ExoPlayer? = null
     private var surfaceView: SurfaceView? = null
     private var progressBar: ProgressBar? = null
+    private var streamUrl: String? = null
     private val handler = Handler(Looper.getMainLooper())
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -32,7 +33,6 @@ class PlayerActivity : Activity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
-        // Minimal UI - no XML layouts
         val rootLayout = FrameLayout(this).apply {
             setBackgroundColor(0xFF000000.toInt())
         }
@@ -55,10 +55,8 @@ class PlayerActivity : Activity() {
         
         setContentView(rootLayout)
         
-        getStreamUrl()?.let { url ->
-            initPlayer()
-            play(url)
-        } ?: finish()
+        streamUrl = getStreamUrl()
+        streamUrl?.let { initPlayer(); play(it) } ?: finish()
     }
 
     private fun getStreamUrl(): String? {
@@ -96,7 +94,10 @@ class PlayerActivity : Activity() {
                     }
                     
                     override fun onPlayerError(error: PlaybackException) {
-                        player?.retry()
+                        // Retry by re-preparing
+                        streamUrl?.let { 
+                            handler.postDelayed({ play(it) }, 1000)
+                        }
                     }
                 })
             }
@@ -110,7 +111,7 @@ class PlayerActivity : Activity() {
     override fun onStart() {
         super.onStart()
         if (player == null) {
-            getStreamUrl()?.let { initPlayer(); play(it) }
+            streamUrl?.let { initPlayer(); play(it) }
         }
     }
 
