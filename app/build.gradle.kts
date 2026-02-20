@@ -13,10 +13,14 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
-        
-        // ARM v7a only - smaller APK, compatible with most TV Boxes
-        ndk {
-            abiFilters += listOf("armeabi-v7a")
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("armeabi-v7a")
+            isUniversalApk = false
         }
     }
 
@@ -33,10 +37,14 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    
+    // Single language to reduce size
+    defaultConfig {
+        resourceConfigurations += setOf("en")
+    }
 }
 
 dependencies {
-    // Minimal dependencies - HLS only
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.2.1")
