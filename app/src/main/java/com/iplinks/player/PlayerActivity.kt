@@ -20,25 +20,37 @@ class PlayerActivity : Activity() {
 
     private var player: ExoPlayer? = null
     private var surfaceView: SurfaceView? = null
+    private var retryCount = 0
+    private var currentUrl: String? = null
+
+    companion object {
+        private const val MIN_BUFFER_MS = 15000      // 15s - prevents stuttering
+        private const val MAX_BUFFER_MS = 50000      // 50s - handles network hiccups
+        private const val BUFFER_FOR_PLAYBACK_MS = 2500
+        private const val BUFFER_AFTER_REBUFFER_MS = 5000
+        private const val MAX_RETRIES = 3
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        
+
         val url = getUrlFromIntent(intent)
         if (url == null) {
             finish()
             return
         }
-        
+
+        currentUrl = url
+
         // Essential for TV/player apps
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUI()
-        
+
         val rootLayout = FrameLayout(this).apply {
             setBackgroundColor(0xFF000000.toInt())
         }
-        
+
         surfaceView = SurfaceView(this).apply {
             layoutParams = FrameLayout.LayoutParams(
                 FrameLayout.LayoutParams.MATCH_PARENT,
@@ -47,7 +59,7 @@ class PlayerActivity : Activity() {
         }
         rootLayout.addView(surfaceView)
         setContentView(rootLayout)
-        
+
         initPlayer()
         play(url)
     }
@@ -55,35 +67,35 @@ class PlayerActivity : Activity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val url = getUrlFromIntent(intent) ?: return
+        currentUrl = url
+        retryCount = 0  // Reset retry counter for new URL
         player?.stop()
         play(url)
     }
 
     private fun getUrlFromIntent(intent: Intent): String? {
-        intent.data?.toString()?.takeIf { 
-            it.startsWith("http") || it.startsWith("rtmp") 
+        intent.data?.toString()?.takeIf {
+            it.startsWith("http") || it.startsWith("rtmp")
         }?.let { return it }
-        
+
         if (intent.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf {
                 it.startsWith("http") || it.startsWith("rtmp")
             }?.let { return it }
         }
-        
+
         return intent.getStringExtra("stream_url")
             ?: intent.getStringExtra("url")
             ?: intent.getStringExtra("video_url")
     }
 
     private fun initPlayer() {
-        // OPTIMIZED FOR STABILITY
-        // 15s min / 50s max = smooth playback on bad connections
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
-                15000,  // minBuffer - prevents stuttering
-                50000,  // maxBuffer - handles network hiccups
-                2500,   // bufferForPlayback - quick start
-                5000    // bufferForPlaybackAfterRebuffer
+                MIN_BUFFER_MS,
+                MAX_BUFFER_MS,
+                BUFFER_FOR_PLAYBACK_MS,
+                BUFFER_AFTER_REBUFFER_MS
             )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
@@ -95,15 +107,16 @@ class PlayerActivity : Activity() {
             .apply {
                 setVideoSurfaceView(surfaceView)
                 playWhenReady = true
-                
+
                 addListener(object : androidx.media3.common.Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
-                        // Auto-retry on error for stability
-                        currentMediaItem?.let { item ->
+                        // Limited retry to prevent infinite loops
+                        if (retryCount < MAX_RETRIES && currentUrl != null) {
+                            retryCount++
                             stop()
-                            setMediaItem(item)
-                            prepare()
+                            play(currentUrl!!)
                         }
+                        // After MAX_RETRIES failures, silently exit
                     }
                 })
             }
@@ -136,6 +149,7 @@ class PlayerActivity : Activity() {
         player?.release()
         player = null
         surfaceView = null
+        currentUrl = null
     }
 
     private fun hideSystemUI() {
