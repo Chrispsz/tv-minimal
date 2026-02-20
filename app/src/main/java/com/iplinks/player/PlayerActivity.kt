@@ -46,7 +46,7 @@ class PlayerActivity : AppCompatActivity() {
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
                         // Auto-retry para estabilidade em streams IPTV
-                        retry()
+                        prepare()
                     }
                 })
             }
