@@ -74,16 +74,24 @@ class PlayerActivity : Activity() {
     }
 
     private fun getUrlFromIntent(intent: Intent): String? {
+        // 1. URI data como URL direta (http/rtmp)
         intent.data?.toString()?.takeIf {
             it.startsWith("http") || it.startsWith("rtmp")
         }?.let { return it }
+        
+        // 2. Query parameter do scheme customizado iplinks://play?stream_url=...
+        intent.data?.getQueryParameter("stream_url")?.takeIf {
+            it.startsWith("http") || it.startsWith("rtmp")
+        }?.let { return it }
 
+        // 3. ACTION_SEND com texto
         if (intent.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf {
                 it.startsWith("http") || it.startsWith("rtmp")
             }?.let { return it }
         }
 
+        // 4. Extras diretos
         return intent.getStringExtra("stream_url")
             ?: intent.getStringExtra("url")
             ?: intent.getStringExtra("video_url")
