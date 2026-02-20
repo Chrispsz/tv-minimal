@@ -4,19 +4,13 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.SurfaceView
-import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
-import android.widget.ProgressBar
-import android.widget.Toast
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
-import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -25,9 +19,7 @@ class PlayerActivity : Activity() {
 
     private var player: ExoPlayer? = null
     private var surfaceView: SurfaceView? = null
-    private var progressBar: ProgressBar? = null
-    private var streamUrl: String? = null
-    private val handler = Handler(Looper.getMainLooper())
+    private var currentUrl: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -35,6 +27,7 @@ class PlayerActivity : Activity() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
+        // Minimal UI - just a black screen with video
         val rootLayout = FrameLayout(this).apply {
             setBackgroundColor(0xFF000000.toInt())
         }
@@ -47,61 +40,46 @@ class PlayerActivity : Activity() {
         }
         rootLayout.addView(surfaceView)
         
-        progressBar = ProgressBar(this).apply {
-            layoutParams = FrameLayout.LayoutParams(
-                FrameLayout.LayoutParams.WRAP_CONTENT,
-                FrameLayout.LayoutParams.WRAP_CONTENT
-            ).apply { gravity = android.view.Gravity.CENTER }
-        }
-        rootLayout.addView(progressBar)
-        
         setContentView(rootLayout)
         
-        streamUrl = getStreamUrl(intent)
-        
-        if (streamUrl != null) {
-            initPlayer()
-            play(streamUrl!!)
-        } else {
-            Toast.makeText(this, "No stream URL found", Toast.LENGTH_SHORT).show()
-            finish()
-        }
+        handleIntent(intent)
     }
 
-    override fun onNewIntent(intent: Intent?) {
+    override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        intent?.let {
-            streamUrl = getStreamUrl(it)
-            streamUrl?.let { url ->
-                if (player == null) initPlayer()
-                play(url)
-            }
+        // Stop current playback before starting new one
+        player?.stop()
+        handleIntent(intent)
+    }
+
+    private fun handleIntent(intent: Intent) {
+        val url = getUrlFromIntent(intent)
+        
+        if (url != null && url != currentUrl) {
+            currentUrl = url
+            if (player == null) initPlayer()
+            play(url)
         }
     }
 
-    private fun getStreamUrl(intent: Intent): String? {
-        // Check for iplinks:// scheme
-        if (intent.scheme == "iplinks") {
-            return intent.dataString?.substringAfter("iplinks://")
-        }
-        
-        // Check for VIEW intent with URI
+    private fun getUrlFromIntent(intent: Intent): String? {
+        // VIEW intent with URI
         intent.data?.toString()?.let { url ->
-            if (url.startsWith("http://") || url.startsWith("https://") || 
-                url.startsWith("rtmp://") || url.startsWith("rtmps://")) {
+            if (url.startsWith("http") || url.startsWith("rtmp")) {
                 return url
             }
         }
         
-        // Check for SEND intent with text
+        // SEND intent with text
         if (intent.action == Intent.ACTION_SEND) {
-            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
-            if (!sharedText.isNullOrEmpty()) {
-                return sharedText.trim()
+            intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.let { text ->
+                if (text.startsWith("http") || text.startsWith("rtmp")) {
+                    return text
+                }
             }
         }
         
-        // Check extras
+        // Extras
         return intent.getStringExtra("stream_url") 
             ?: intent.getStringExtra("url")
             ?: intent.getStringExtra("video_url")
@@ -120,45 +98,13 @@ class PlayerActivity : Activity() {
             .apply {
                 setVideoSurfaceView(surfaceView)
                 playWhenReady = true
-                
-                addListener(object : androidx.media3.common.Player.Listener {
-                    override fun onIsLoadingChanged(isLoading: Boolean) {
-                        progressBar?.visibility = if (isLoading) View.VISIBLE else View.GONE
-                    }
-                    
-                    override fun onPlaybackStateChanged(state: Int) {
-                        when (state) {
-                            ExoPlayer.STATE_READY -> progressBar?.visibility = View.GONE
-                            ExoPlayer.STATE_BUFFERING -> progressBar?.visibility = View.VISIBLE
-                            ExoPlayer.STATE_ENDED -> {
-                                // For live streams, restart
-                                streamUrl?.let { handler.postDelayed({ play(it) }, 1000) }
-                            }
-                        }
-                    }
-                    
-                    override fun onPlayerError(error: PlaybackException) {
-                        // Retry on error
-                        handler.postDelayed({ streamUrl?.let { play(it) } }, 2000)
-                    }
-                })
             }
     }
 
     private fun play(url: String) {
-        try {
-            player?.setMediaItem(MediaItem.fromUri(Uri.parse(url)))
-            player?.prepare()
-        } catch (e: Exception) {
-            Toast.makeText(this, "Invalid URL: ${e.message}", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    override fun onStart() {
-        super.onStart()
-        if (player == null && streamUrl != null) {
-            initPlayer()
-            play(streamUrl!!)
+        player?.apply {
+            setMediaItem(MediaItem.fromUri(Uri.parse(url)))
+            prepare()
         }
     }
 
@@ -175,7 +121,6 @@ class PlayerActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        handler.removeCallbacksAndMessages(null)
         player?.release()
         player = null
     }

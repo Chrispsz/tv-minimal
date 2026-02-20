@@ -12,10 +12,12 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Player">
 
+        <!-- singleTask: apenas UMA instância, novos intents vão para onNewIntent() -->
         <activity 
             android:name=".PlayerActivity" 
             android:exported="true"
-            android:screenOrientation="fullSensor"
+            android:launchMode="singleTask"
+            android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|keyboardHidden">
             
             <!-- Launcher -->
@@ -25,7 +27,7 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
             
-            <!-- Video URLs (most common for IPTV apps) -->
+            <!-- Video URLs -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -35,7 +37,7 @@
                 <data android:mimeType="video/*" />
             </intent-filter>
             
-            <!-- M3U8 by MIME type -->
+            <!-- M3U8 MIME -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -46,7 +48,7 @@
                 <data android:mimeType="application/vnd.apple.mpegurl" />
             </intent-filter>
             
-            <!-- M3U8 by file extension -->
+            <!-- M3U8 extension -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -56,13 +58,6 @@
                 <data android:host="*" />
                 <data android:pathPattern=".*\\.m3u8" />
                 <data android:pathPattern=".*\\.m3u" />
-            </intent-filter>
-            
-            <!-- Direct URL via intent -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <data android:scheme="iplinks" />
             </intent-filter>
             
             <!-- Share URL -->
