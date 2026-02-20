@@ -11,6 +11,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -19,28 +20,20 @@ class PlayerActivity : Activity() {
 
     private var player: ExoPlayer? = null
     private var surfaceView: SurfaceView? = null
-    private var currentUrl: String? = null
-
-    companion object {
-        private var instance: PlayerActivity? = null
-        
-        fun finishCurrent() {
-            instance?.finish()
-        }
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         
-        // Finish any previous instance
-        instance?.let { 
-            it.player?.release()
-            it.finish()
+        val url = getUrlFromIntent(intent)
+        if (url == null) {
+            finish()
+            return
         }
-        instance = this
         
+        // Essential for TV/player apps
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        hideSystemUI()
         
         val rootLayout = FrameLayout(this).apply {
             setBackgroundColor(0xFF000000.toInt())
@@ -53,48 +46,45 @@ class PlayerActivity : Activity() {
             )
         }
         rootLayout.addView(surfaceView)
-        
         setContentView(rootLayout)
         
-        handleIntent(intent)
+        initPlayer()
+        play(url)
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Stop current and start new
+        val url = getUrlFromIntent(intent) ?: return
         player?.stop()
-        handleIntent(intent)
-    }
-
-    private fun handleIntent(intent: Intent) {
-        val url = getUrlFromIntent(intent)
-        
-        if (url != null && url != currentUrl) {
-            currentUrl = url
-            if (player == null) initPlayer()
-            play(url)
-        }
+        play(url)
     }
 
     private fun getUrlFromIntent(intent: Intent): String? {
-        intent.data?.toString()?.let { url ->
-            if (url.startsWith("http") || url.startsWith("rtmp")) return url
-        }
+        intent.data?.toString()?.takeIf { 
+            it.startsWith("http") || it.startsWith("rtmp") 
+        }?.let { return it }
         
         if (intent.action == Intent.ACTION_SEND) {
-            intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.let { text ->
-                if (text.startsWith("http") || text.startsWith("rtmp")) return text
-            }
+            intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf {
+                it.startsWith("http") || it.startsWith("rtmp")
+            }?.let { return it }
         }
         
-        return intent.getStringExtra("stream_url") 
+        return intent.getStringExtra("stream_url")
             ?: intent.getStringExtra("url")
             ?: intent.getStringExtra("video_url")
     }
 
     private fun initPlayer() {
+        // OPTIMIZED FOR STABILITY
+        // 15s min / 50s max = smooth playback on bad connections
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(15000, 50000, 2500, 5000)
+            .setBufferDurationsMs(
+                15000,  // minBuffer - prevents stuttering
+                50000,  // maxBuffer - handles network hiccups
+                2500,   // bufferForPlayback - quick start
+                5000    // bufferForPlaybackAfterRebuffer
+            )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
@@ -105,6 +95,17 @@ class PlayerActivity : Activity() {
             .apply {
                 setVideoSurfaceView(surfaceView)
                 playWhenReady = true
+                
+                addListener(object : androidx.media3.common.Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        // Auto-retry on error for stability
+                        currentMediaItem?.let { item ->
+                            stop()
+                            setMediaItem(item)
+                            prepare()
+                        }
+                    }
+                })
             }
     }
 
@@ -117,7 +118,6 @@ class PlayerActivity : Activity() {
 
     override fun onResume() {
         super.onResume()
-        hideSystemUI()
         player?.play()
     }
 
@@ -128,8 +128,6 @@ class PlayerActivity : Activity() {
 
     override fun onStop() {
         super.onStop()
-        // When user leaves, finish this activity
-        // Next stream will start fresh
         finish()
     }
 
@@ -137,7 +135,7 @@ class PlayerActivity : Activity() {
         super.onDestroy()
         player?.release()
         player = null
-        if (instance == this) instance = null
+        surfaceView = null
     }
 
     private fun hideSystemUI() {
