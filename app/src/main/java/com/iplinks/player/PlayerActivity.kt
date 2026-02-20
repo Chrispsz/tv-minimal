@@ -1,6 +1,7 @@
 package com.iplinks.player
 
 import android.app.Activity
+import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
 import android.os.Handler
@@ -10,6 +11,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.FrameLayout
 import android.widget.ProgressBar
+import android.widget.Toast
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -55,16 +57,54 @@ class PlayerActivity : Activity() {
         
         setContentView(rootLayout)
         
-        streamUrl = getStreamUrl()
-        streamUrl?.let { initPlayer(); play(it) } ?: finish()
+        streamUrl = getStreamUrl(intent)
+        
+        if (streamUrl != null) {
+            initPlayer()
+            play(streamUrl!!)
+        } else {
+            Toast.makeText(this, "No stream URL found", Toast.LENGTH_SHORT).show()
+            finish()
+        }
     }
 
-    private fun getStreamUrl(): String? {
-        intent.data?.toString()?.let { return it }
-        if (intent.action == android.content.Intent.ACTION_SEND) {
-            intent.getStringExtra(android.content.Intent.EXTRA_TEXT)?.let { return it }
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        intent?.let {
+            streamUrl = getStreamUrl(it)
+            streamUrl?.let { url ->
+                if (player == null) initPlayer()
+                play(url)
+            }
         }
-        return intent.getStringExtra("stream_url") ?: intent.getStringExtra("url")
+    }
+
+    private fun getStreamUrl(intent: Intent): String? {
+        // Check for iplinks:// scheme
+        if (intent.scheme == "iplinks") {
+            return intent.dataString?.substringAfter("iplinks://")
+        }
+        
+        // Check for VIEW intent with URI
+        intent.data?.toString()?.let { url ->
+            if (url.startsWith("http://") || url.startsWith("https://") || 
+                url.startsWith("rtmp://") || url.startsWith("rtmps://")) {
+                return url
+            }
+        }
+        
+        // Check for SEND intent with text
+        if (intent.action == Intent.ACTION_SEND) {
+            val sharedText = intent.getStringExtra(Intent.EXTRA_TEXT)
+            if (!sharedText.isNullOrEmpty()) {
+                return sharedText.trim()
+            }
+        }
+        
+        // Check extras
+        return intent.getStringExtra("stream_url") 
+            ?: intent.getStringExtra("url")
+            ?: intent.getStringExtra("video_url")
     }
 
     private fun initPlayer() {
@@ -90,28 +130,35 @@ class PlayerActivity : Activity() {
                         when (state) {
                             ExoPlayer.STATE_READY -> progressBar?.visibility = View.GONE
                             ExoPlayer.STATE_BUFFERING -> progressBar?.visibility = View.VISIBLE
+                            ExoPlayer.STATE_ENDED -> {
+                                // For live streams, restart
+                                streamUrl?.let { handler.postDelayed({ play(it) }, 1000) }
+                            }
                         }
                     }
                     
                     override fun onPlayerError(error: PlaybackException) {
-                        // Retry by re-preparing
-                        streamUrl?.let { 
-                            handler.postDelayed({ play(it) }, 1000)
-                        }
+                        // Retry on error
+                        handler.postDelayed({ streamUrl?.let { play(it) } }, 2000)
                     }
                 })
             }
     }
 
     private fun play(url: String) {
-        player?.setMediaItem(MediaItem.fromUri(Uri.parse(url)))
-        player?.prepare()
+        try {
+            player?.setMediaItem(MediaItem.fromUri(Uri.parse(url)))
+            player?.prepare()
+        } catch (e: Exception) {
+            Toast.makeText(this, "Invalid URL: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
     }
 
     override fun onStart() {
         super.onStart()
-        if (player == null) {
-            streamUrl?.let { initPlayer(); play(it) }
+        if (player == null && streamUrl != null) {
+            initPlayer()
+            play(streamUrl!!)
         }
     }
 
