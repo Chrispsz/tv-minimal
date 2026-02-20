@@ -13,6 +13,7 @@ import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import androidx.media3.ui.AspectRatioFrameLayout
 import androidx.media3.ui.PlayerView
 
 class PlayerActivity : AppCompatActivity() {
@@ -42,7 +43,6 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun initPlayer() {
-        // Buffer otimizado para IPTV
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(15000, 50000, 2500, 5000)
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -55,7 +55,7 @@ class PlayerActivity : AppCompatActivity() {
             .apply {
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
-                        prepare() // Auto-retry
+                        prepare()
                     }
                 })
             }
@@ -63,7 +63,7 @@ class PlayerActivity : AppCompatActivity() {
         findViewById<PlayerView>(R.id.player_view).apply {
             player = this@PlayerActivity.player
             useController = true
-            resizeMode = PlayerView.RESIZE_MODE_FIT // Proporção correta
+            resizeMode = AspectRatioFrameLayout.RESIZE_MODE_FIT
         }
         
         hideSystemUI()
