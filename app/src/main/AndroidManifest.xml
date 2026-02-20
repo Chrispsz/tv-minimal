@@ -6,8 +6,8 @@
     <uses-feature android:name="android.software.leanback" android:required="false" />
 
     <application
-        android:allowBackup="true"
-        android:icon="@mipmap/ic_launcher"
+        android:allowBackup="false"
+        android:icon="@drawable/ic_launcher"
         android:label="@string/app_name"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Player">
@@ -18,14 +18,12 @@
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|keyboardHidden">
             
-            <!-- Launcher -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
             
-            <!-- HLS/M3U8 via MIME type -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -36,7 +34,6 @@
                 <data android:mimeType="application/vnd.apple.mpegurl" />
             </intent-filter>
             
-            <!-- HLS/M3U8 via file extension -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -48,7 +45,6 @@
                 <data android:pathPattern=".*\\.m3u" />
             </intent-filter>
             
-            <!-- Share URL -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />

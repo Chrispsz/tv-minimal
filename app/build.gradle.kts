@@ -13,6 +13,7 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+        resourceConfigurations += setOf("en")
     }
 
     splits {
@@ -37,16 +38,11 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
-    
-    // Single language to reduce size
-    defaultConfig {
-        resourceConfigurations += setOf("en")
-    }
 }
 
 dependencies {
-    implementation("androidx.appcompat:appcompat:1.6.1")
+    // CORE ONLY - minimum dependencies for HLS player
+    implementation("androidx.core:core:1.12.0")
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.2.1")
-    implementation("androidx.media3:media3-ui:1.2.1")
 }
