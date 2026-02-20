@@ -21,13 +21,27 @@ class PlayerActivity : Activity() {
     private var surfaceView: SurfaceView? = null
     private var currentUrl: String? = null
 
+    companion object {
+        private var instance: PlayerActivity? = null
+        
+        fun finishCurrent() {
+            instance?.finish()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Finish any previous instance
+        instance?.let { 
+            it.player?.release()
+            it.finish()
+        }
+        instance = this
         
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         
-        // Minimal UI - just a black screen with video
         val rootLayout = FrameLayout(this).apply {
             setBackgroundColor(0xFF000000.toInt())
         }
@@ -47,7 +61,7 @@ class PlayerActivity : Activity() {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        // Stop current playback before starting new one
+        // Stop current and start new
         player?.stop()
         handleIntent(intent)
     }
@@ -63,23 +77,16 @@ class PlayerActivity : Activity() {
     }
 
     private fun getUrlFromIntent(intent: Intent): String? {
-        // VIEW intent with URI
         intent.data?.toString()?.let { url ->
-            if (url.startsWith("http") || url.startsWith("rtmp")) {
-                return url
-            }
+            if (url.startsWith("http") || url.startsWith("rtmp")) return url
         }
         
-        // SEND intent with text
         if (intent.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.let { text ->
-                if (text.startsWith("http") || text.startsWith("rtmp")) {
-                    return text
-                }
+                if (text.startsWith("http") || text.startsWith("rtmp")) return text
             }
         }
         
-        // Extras
         return intent.getStringExtra("stream_url") 
             ?: intent.getStringExtra("url")
             ?: intent.getStringExtra("video_url")
@@ -119,10 +126,18 @@ class PlayerActivity : Activity() {
         player?.pause()
     }
 
+    override fun onStop() {
+        super.onStop()
+        // When user leaves, finish this activity
+        // Next stream will start fresh
+        finish()
+    }
+
     override fun onDestroy() {
         super.onDestroy()
         player?.release()
         player = null
+        if (instance == this) instance = null
     }
 
     private fun hideSystemUI() {

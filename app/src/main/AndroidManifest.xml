@@ -12,12 +12,13 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Player">
 
-        <!-- singleTask: apenas UMA instância, novos intents vão para onNewIntent() -->
+        <!-- singleInstance: truly single instance, no back stack -->
         <activity 
             android:name=".PlayerActivity" 
             android:exported="true"
-            android:launchMode="singleTask"
+            android:launchMode="singleInstance"
             android:screenOrientation="landscape"
+            android:excludeFromRecents="true"
             android:configChanges="orientation|screenSize|keyboardHidden">
             
             <!-- Launcher -->
