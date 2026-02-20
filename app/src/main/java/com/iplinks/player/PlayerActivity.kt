@@ -7,6 +7,8 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import androidx.media3.common.MediaItem
+import androidx.media3.common.PlaybackException
+import androidx.media3.common.Player
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -36,9 +38,19 @@ class PlayerActivity : AppCompatActivity() {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(15000, 50000, 2500, 5000)
             .setPrioritizeTimeOverSizeThresholds(true).build()
+        
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
             .setTrackSelector(DefaultTrackSelector(this)).build()
+            .apply {
+                addListener(object : Player.Listener {
+                    override fun onPlayerError(error: PlaybackException) {
+                        // Auto-retry para estabilidade em streams IPTV
+                        retry()
+                    }
+                })
+            }
+        
         playerView?.player = player
         playerView?.useController = true
     }
