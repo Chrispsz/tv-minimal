@@ -13,6 +13,11 @@ android {
         targetSdk = 34
         versionCode = 1
         versionName = "1.0.0"
+        
+        // ARM v7a only - smaller APK, compatible with most TV Boxes
+        ndk {
+            abiFilters += listOf("armeabi-v7a")
+        }
     }
 
     buildTypes {
@@ -31,6 +36,7 @@ android {
 }
 
 dependencies {
+    // Minimal dependencies - HLS only
     implementation("androidx.appcompat:appcompat:1.6.1")
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.2.1")

@@ -18,40 +18,37 @@
             android:screenOrientation="landscape"
             android:configChanges="orientation|screenSize|keyboardHidden">
             
+            <!-- Launcher -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            
+            <!-- HLS/M3U8 via MIME type -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="http" /><data android:scheme="https" />
-                <data android:mimeType="video/*" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
+                <data android:mimeType="application/x-mpegURL" />
+                <data android:mimeType="application/vnd.apple.mpegurl" />
             </intent-filter>
+            
+            <!-- HLS/M3U8 via file extension -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
                 <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="http" /><data android:scheme="https" />
+                <data android:scheme="http" />
+                <data android:scheme="https" />
                 <data android:host="*" />
                 <data android:pathPattern=".*\\.m3u8" />
+                <data android:pathPattern=".*\\.m3u" />
             </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="http" /><data android:scheme="https" />
-                <data android:host="*" />
-                <data android:pathPattern=".*\\.mp4" />
-            </intent-filter>
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="rtmp" /><data android:scheme="rtmps" />
-            </intent-filter>
+            
+            <!-- Share URL -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
