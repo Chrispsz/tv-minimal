@@ -1,5 +1,6 @@
 package com.iplinks.player
 
+import android.content.pm.ActivityInfo
 import android.os.Bundle
 import android.view.WindowManager
 import androidx.appcompat.app.AppCompatActivity
@@ -16,15 +17,21 @@ import androidx.media3.ui.PlayerView
 
 class PlayerActivity : AppCompatActivity() {
     private var player: ExoPlayer? = null
-    private var playerView: PlayerView? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        
+        // Fixar em landscape (deitado) - sem rotação
+        requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_LANDSCAPE
+        
+        // Fullscreen imersivo
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        
         setContentView(R.layout.activity_player)
-        playerView = findViewById(R.id.player_view)
-        getStreamUrl()?.let { initPlayer(); play(it) } ?: finish()
+        
+        initPlayer()
+        getStreamUrl()?.let { play(it) } ?: finish()
     }
 
     private fun getStreamUrl(): String? {
@@ -35,24 +42,31 @@ class PlayerActivity : AppCompatActivity() {
     }
 
     private fun initPlayer() {
+        // Buffer otimizado para IPTV
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(15000, 50000, 2500, 5000)
-            .setPrioritizeTimeOverSizeThresholds(true).build()
-        
+            .setPrioritizeTimeOverSizeThresholds(true)
+            .build()
+
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
-            .setTrackSelector(DefaultTrackSelector(this)).build()
+            .setTrackSelector(DefaultTrackSelector(this))
+            .build()
             .apply {
                 addListener(object : Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
-                        // Auto-retry para estabilidade em streams IPTV
-                        prepare()
+                        prepare() // Auto-retry
                     }
                 })
             }
+
+        findViewById<PlayerView>(R.id.player_view).apply {
+            player = this@PlayerActivity.player
+            useController = true
+            resizeMode = PlayerView.RESIZE_MODE_FIT // Proporção correta
+        }
         
-        playerView?.player = player
-        playerView?.useController = true
+        hideSystemUI()
     }
 
     private fun play(url: String) {
@@ -61,10 +75,10 @@ class PlayerActivity : AppCompatActivity() {
         player?.playWhenReady = true
     }
 
-    override fun onStart() { super.onStart(); if (player == null) getStreamUrl()?.let { initPlayer(); play(it) } }
+    override fun onStart() { super.onStart(); player?.play() }
     override fun onResume() { super.onResume(); hideSystemUI(); player?.play() }
     override fun onPause() { super.onPause(); player?.pause() }
-    override fun onDestroy() { super.onDestroy(); player?.release(); player = null }
+    override fun onDestroy() { super.onDestroy(); player?.release() }
 
     private fun hideSystemUI() {
         WindowInsetsControllerCompat(window, window.decorView).apply {
