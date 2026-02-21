@@ -7,6 +7,12 @@ android {
     namespace = "com.iplinks.player"
     compileSdk = 34
 
+    // Performance: Acelera build em projetos que crescem
+    buildFeatures {
+        buildConfig = false
+        nonTransitiveRClass = true
+    }
+
     defaultConfig {
         applicationId = "com.iplinks.player"
         minSdk = 21
@@ -29,7 +35,8 @@ android {
         debug {
             isMinifyEnabled = false
             isShrinkResources = false
-            enableUnitTestCoverage = true
+            // Desativado para builds mais rápidos
+            enableUnitTestCoverage = false
         }
         release {
             isMinifyEnabled = true
@@ -61,9 +68,6 @@ dependencies {
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.2.1")
     
-    // LEAKCANARY - Detecção de memory leaks (apenas debug)
-    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.13")
-    
     // TESTES
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
     testImplementation("junit:junit:4.13.2")
@@ -71,17 +75,12 @@ dependencies {
     testImplementation("app.cash.turbine:turbine:1.0.0")
 }
 
-// ============================================
-// TESTES AUTOMÁTICOS EM TODOS OS BUILDS
-// ============================================
-
-// Usar afterEvaluate para garantir que as tasks existam
+// Testes automáticos em todos os builds
 afterEvaluate {
     tasks.findByName("assembleDebug")?.dependsOn("testDebugUnitTest")
     tasks.findByName("assembleRelease")?.dependsOn("testReleaseUnitTest")
 }
 
-// Relatório de cobertura
 tasks.register("testReport") {
     dependsOn("testDebugUnitTest")
     doLast {

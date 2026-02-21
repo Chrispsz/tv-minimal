@@ -10,17 +10,16 @@
 -keep class androidx.lifecycle.** { *; }
 -keepclassmembers class androidx.lifecycle.** { *; }
 
-# LeakCanary - Keep for debug builds (will be stripped in release)
--keep class leakcanary.** { *; }
--dontwarn leakcanary.**
-
 # Keep PlayerActivity for AndroidManifest
 -keep public class com.iplinks.player.PlayerActivity { *; }
 -keep public class com.iplinks.player.PlayerActivity$* { *; }
 
-# Keep sealed classes and their subclasses
+# Keep sealed interfaces and their implementations
 -keep class com.iplinks.player.PlayerActivity$PlayerState { *; }
 -keep class com.iplinks.player.PlayerActivity$PlayerState$* { *; }
+-keep class com.iplinks.player.PlayerActivity$ErrorClassification { *; }
+-keep class com.iplinks.player.PlayerActivity$ErrorClassification$* { *; }
+-keep class com.iplinks.player.PlayerActivity$ValidatedUrl { *; }
 
 # Optimization settings
 -optimizationpasses 5
@@ -49,3 +48,8 @@
 }
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+
+# Kotlin inline classes (value classes)
+-keepclassmembers class com.iplinks.player.PlayerActivity$ValidatedUrl {
+    public java.lang.String getUrl();
+}
