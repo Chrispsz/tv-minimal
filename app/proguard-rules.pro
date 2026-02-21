@@ -1,14 +1,42 @@
 # ============================================
-# IPLINKS Player - ProGuard Rules (AGRESSIVO)
+# IPLINKS Player - ProGuard Rules (CORRIGIDO)
 # ============================================
 
 # ==================== MEDIA3 / EXOPLAYER ====================
+# Keep all Media3 classes - essential for playback
 -keep class androidx.media3.** { *; }
+-keep interface androidx.media3.** { *; }
+-keepclassmembers class androidx.media3.** { *; }
 -dontwarn androidx.media3.**
+
+# ExoPlayer specific - keep all native and reflection classes
+-keep class com.google.android.exoplayer2.** { *; }
+-keepclassmembers class com.google.android.exoplayer2.** { *; }
+-dontwarn com.google.android.exoplayer2.**
+
+# DataSource factories - needed for HTTP requests
+-keep class * extends androidx.media3.datasource.DataSource { *; }
+-keep class * implements androidx.media3.datasource.DataSource { *; }
+-keep class androidx.media3.datasource.** { *; }
+-keepclassmembers class androidx.media3.datasource.** { *; }
+
+# MediaSource factories
+-keep class * extends androidx.media3.exoplayer.source.MediaSource { *; }
+-keep class androidx.media3.exoplayer.source.** { *; }
+-keepclassmembers class androidx.media3.exoplayer.source.** { *; }
+
+# HLS specific
+-keep class androidx.media3.exoplayer.hls.** { *; }
+-keepclassmembers class androidx.media3.exoplayer.hls.** { *; }
+
+# Decoder renderers
+-keep class androidx.media3.exoplayer.** { *; }
+-keepclassmembers class androidx.media3.exoplayer.** { *; }
 
 # ==================== LIFECYCLE ====================
 -keep class androidx.lifecycle.** { *; }
 -keepclassmembers class androidx.lifecycle.** { *; }
+-keep class androidx.core.** { *; }
 
 # ==================== PLAYER ACTIVITY ====================
 -keep public class com.iplinks.player.PlayerActivity { *; }
@@ -26,71 +54,24 @@
     public int getValue();
 }
 
-# ==================== KOTLIN OPTIMIZATIONS ====================
-# Keep Kotlin Metadata for reflection-free operations
+# ==================== KOTLIN ====================
+-keep class kotlin.** { *; }
 -keep class kotlin.Metadata { *; }
+-keepclassmembers class **$WhenMappings { <fields>; }
 
-# Kotlin inline functions
--keepclassmembers class **$WhenMappings {
-    <fields>;
-}
-
-# Coroutines
+# Kotlin coroutines
 -keepclassmembers class kotlinx.coroutines.** {
     volatile <fields>;
 }
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
--keepnames class kotlinx.coroutines.Dispatchers { *; }
+-keep class kotlinx.coroutines.** { *; }
 
-# Value classes / Inline classes
--keepclassmembers class **.**$** {
-    public <methods>;
-}
-
-# ==================== AGRESSIVE OPTIMIZATIONS ====================
--optimizationpasses 7
--dontusemixedcaseclassnames
--dontskipnonpubliclibraryclasses
--verbose
-
-# Aggressive optimizations - remove dead code
--optimizations !code/simplification/arithmetic,!field/*,!class/merging/*,!code/allocation/variable
-
-# ==================== REMOVE DEBUG CODE ====================
-# Remove ALL logging in release (zero overhead)
--assumenosideeffects class android.util.Log {
-    public static *** d(...);
-    public static *** v(...);
-    public static *** i(...);
-    public static *** w(...);
-    public static *** e(...);
-    public static *** wtf(...);
-}
-
-# Remove System.out and System.err
--assumenosideeffects class java.io.PrintStream {
-    public *** println(...);
-    public *** print(...);
-    public *** printf(...);
-}
-
-# Remove StringBuilder debug
--assumenosideeffects class java.lang.StringBuilder {
-    public *** append(java.lang.String);
-    public *** toString();
-}
-
-# ==================== REMOVE ASSERTIONS ====================
--assumenosideeffects class kotlin.jvm.internal.Intrinsics {
-    public static *** checkNotNull(...);
-    public static *** checkNotNullParameter(...);
-    public static *** checkExpressionValueIsNotNull(...);
-    public static *** checkNotNullExpressionValue(...);
-    public static *** checkReturnedValueIsNotNull(...);
-    public static *** checkFieldIsNotNull(...);
-    public static *** checkParameterIsNotNull(...);
-}
+# ==================== ANDROID COMPONENTS ====================
+-keep class android.content.Intent { *; }
+-keep class android.net.Uri { *; }
+-keep class android.os.Bundle { *; }
+-keep class android.view.SurfaceView { *; }
 
 # ==================== NATIVE METHODS ====================
 -keepclasseswithmembernames class * {
@@ -107,3 +88,24 @@
 -keepclassmembers class * implements android.os.Parcelable {
     public static final android.os.Parcelable$Creator CREATOR;
 }
+
+# ==================== REMOVE LOGS ONLY ====================
+# Remove only debug logs, keep everything else
+-assumenosideeffects class android.util.Log {
+    public static *** d(...);
+    public static *** v(...);
+}
+
+# ==================== OPTIMIZATIONS (LESS AGGRESSIVE) ====================
+-optimizationpasses 3
+-dontusemixedcaseclassnames
+-dontskipnonpubliclibraryclasses
+
+# Only safe optimizations
+-optimizations !code/simplification/arithmetic,!field/*,!class/merging/*
+
+# ==================== CRITICAL: DO NOT REMOVE ====================
+# These are needed for ExoPlayer to work correctly
+-keepattributes *Annotation*
+-keepattributes SourceFile,LineNumberTable
+-keepattributes RuntimeVisibleAnnotations,RuntimeInvisibleAnnotations
