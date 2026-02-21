@@ -23,6 +23,7 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.source.BehindLiveWindowException
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -428,6 +429,19 @@ class PlayerActivity : Activity(), LifecycleOwner {
         
         override fun onPlayerError(error: PlaybackException) {
             Log.e(TAG, "onPlayerError: ${error.message}, errorCode=${error.errorCode}", error)
+            
+            // ==================== BEHIND LIVE WINDOW - TRATAMENTO ESPECIAL ====================
+            // Este erro ocorre em streams HLS ao vivo quando o player fica para trás
+            // da janela de transmissão. A solução é voltar para o ponto ao vivo.
+            if (error.cause is BehindLiveWindowException) {
+                Log.w(TAG, "onPlayerError: BehindLiveWindowException - voltando para live edge")
+                player?.apply {
+                    // Seek para o ponto mais recente da transmissão ao vivo
+                    seekToDefaultPosition()
+                    prepare()
+                }
+                return // Não mostra erro, recupera automaticamente
+            }
             
             val url = when (val state = currentState) {
                 is PlayerState.Loading -> state.url
