@@ -10,56 +10,129 @@ import android.widget.FrameLayout
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleOwner
+import androidx.lifecycle.LifecycleRegistry
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 
-class PlayerActivity : Activity() {
+/**
+ * PlayerActivity - HLS Player otimizado para Android TV
+ * 
+ * Otimizações implementadas:
+ * - lifecycleScope para coroutines automáticas
+ * - Sealed class para estados do player
+ * - Limpeza completa de recursos no onDestroy
+ * - LeakCanary para detecção de leaks em debug
+ */
+class PlayerActivity : Activity(), LifecycleOwner {
 
+    // ==================== STATE ====================
+    private val lifecycleRegistry = LifecycleRegistry(this)
     private var player: ExoPlayer? = null
+    private var playerListener: PlayerEventListener? = null
+    private var monitorJob: Job? = null
     private var retryCount = 0
-    private var playerListener: androidx.media3.common.Player.Listener? = null
-
-    companion object {
-        private const val MIN_BUFFER_MS = 10000
-        private const val MAX_BUFFER_MS = 25000
-        private const val BUFFER_FOR_PLAYBACK_MS = 2000
-        private const val MAX_RETRIES = 3
+    
+    // Estado atual do player usando sealed class
+    private sealed class PlayerState {
+        data object Idle : PlayerState()
+        data class Loading(val url: String) : PlayerState()
+        data class Playing(val url: String) : PlayerState()
+        data class Error(val exception: PlaybackException, val url: String) : PlayerState()
     }
+    private var currentState: PlayerState = PlayerState.Idle
+
+    // ==================== COMPANION ====================
+    companion object {
+        private const val MIN_BUFFER_MS = 10_000      // 10s - buffer mínimo
+        private const val MAX_BUFFER_MS = 25_000      // 25s - buffer máximo  
+        private const val BUFFER_FOR_PLAYBACK_MS = 2_000
+        private const val MAX_RETRIES = 3
+        private const val MONITOR_INTERVAL_MS = 5_000L
+        
+        // Inline function para evitar overhead de lambda
+        private inline fun String?.isValidUrl(): Boolean =
+            this != null && trim().startsWith("http")
+    }
+
+    // ==================== LIFECYCLE ====================
+    override val lifecycle: Lifecycle get() = lifecycleRegistry
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-
-        val url = getUrlFromIntent(intent) ?: run { finish(); return }
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
+        
+        val url = resolveUrl(intent)
+        if (!url.isValidUrl()) {
+            finish()
+            return
+        }
 
         setupWindow()
         setupUI()
-        play(url)
+        startMonitoring()
+        play(url.trim())
+    }
+
+    override fun onStart() {
+        super.onStart()
+        lifecycleRegistry.currentState = Lifecycle.State.STARTED
+    }
+
+    override fun onResume() {
+        super.onResume()
+        lifecycleRegistry.currentState = Lifecycle.State.RESUMED
+        player?.play()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        player?.pause()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        lifecycleRegistry.currentState = Lifecycle.State.CREATED
+        // Em TV, parar a activity é comum - não forçar finish
+    }
+
+    override fun onDestroy() {
+        lifecycleRegistry.currentState = Lifecycle.State.DESTROYED
+        releaseAllResources()
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        getUrlFromIntent(intent)?.let { url ->
+        resolveUrl(intent)?.takeIf { it.isValidUrl() }?.let { url ->
             retryCount = 0
             player?.stop()
-            play(url)
+            play(url.trim())
         }
     }
 
-    private fun getUrlFromIntent(intent: Intent): String? {
-        intent.data?.toString()?.takeIf { it.startsWith("http") }?.let { return it }
-
-        if (intent.action == Intent.ACTION_SEND) {
-            intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
-                ?.takeIf { it.startsWith("http") }?.let { return it }
-        }
-
-        return intent.getStringExtra("stream_url") ?: intent.getStringExtra("url")
+    // ==================== URL RESOLUTION ====================
+    private fun resolveUrl(intent: Intent): String? {
+        // Prioridade: data URI > ACTION_SEND > extras
+        return intent.data?.toString()
+            ?: intent.getStringExtra(Intent.EXTRA_TEXT)
+            ?: intent.getStringExtra("stream_url")
+            ?: intent.getStringExtra("url")
     }
 
+    // ==================== SETUP ====================
     private fun setupWindow() {
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -68,37 +141,47 @@ class PlayerActivity : Activity() {
     }
 
     private fun setupUI() {
-        val surfaceView = SurfaceView(this).apply { layoutParams = FrameLayout.LayoutParams(-1, -1) }
-        setContentView(FrameLayout(this).apply { setBackgroundColor(0xFF000000.toInt()); addView(surfaceView) })
-        initPlayer(surfaceView)
+        val surfaceView = SurfaceView(this).apply {
+            layoutParams = FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT,
+                FrameLayout.LayoutParams.MATCH_PARENT
+            )
+        }
+        
+        val container = FrameLayout(this).apply {
+            setBackgroundColor(0xFF000000.toInt())
+            addView(surfaceView)
+        }
+        
+        setContentView(container)
+        initializePlayer(surfaceView)
     }
 
-    private fun initPlayer(surfaceView: SurfaceView) {
+    // ==================== PLAYER ====================
+    private fun initializePlayer(surfaceView: SurfaceView) {
+        // LoadControl otimizado para streaming
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(MIN_BUFFER_MS, MAX_BUFFER_MS, BUFFER_FOR_PLAYBACK_MS, 5000)
+            .setBufferDurationsMs(
+                MIN_BUFFER_MS,
+                MAX_BUFFER_MS,
+                BUFFER_FOR_PLAYBACK_MS,
+                BUFFER_FOR_PLAYBACK_MS
+            )
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
+        // TrackSelector para melhor qualidade
         val trackSelector = DefaultTrackSelector(this).apply {
-            setParameters(buildUponParameters().setForceHighestSupportedBitrate(true))
+            setParameters(
+                buildUponParameters()
+                    .setForceHighestSupportedBitrate(true)
+            )
         }
 
-        // Listener como propriedade para poder remover depois
-        playerListener = object : androidx.media3.common.Player.Listener {
-            override fun onPlayerError(error: PlaybackException) {
-                player?.currentMediaItem?.let {
-                    if (retryCount < MAX_RETRIES) {
-                        retryCount++
-                        player?.apply {
-                            stop()
-                            setMediaItem(it)
-                            prepare()
-                        }
-                    }
-                }
-            }
-        }
+        // Listener como classe separada para melhor controle
+        playerListener = PlayerEventListener()
 
+        // ExoPlayer instance
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
@@ -107,52 +190,94 @@ class PlayerActivity : Activity() {
                 setVideoSurfaceView(surfaceView)
                 playWhenReady = true
                 setWakeMode(C.WAKE_MODE_NETWORK)
-                addListener(playerListener!!)
+                playerListener?.let { addListener(it) }
             }
     }
 
     private fun play(url: String) {
-        player?.apply {
-            setMediaItem(
-                MediaItem.Builder()
-                    .setUri(Uri.parse(url))
-                    .setLiveConfiguration(
-                        MediaItem.LiveConfiguration.Builder()
-                            .setTargetOffsetMs(3000L)
-                            .setMinPlaybackSpeed(0.97f)
-                            .setMaxPlaybackSpeed(1.03f)
-                            .build()
-                    )
+        currentState = PlayerState.Loading(url)
+        
+        val mediaItem = MediaItem.Builder()
+            .setUri(Uri.parse(url))
+            .setLiveConfiguration(
+                MediaItem.LiveConfiguration.Builder()
+                    .setTargetOffsetMs(3000L)
+                    .setMinPlaybackSpeed(0.97f)
+                    .setMaxPlaybackSpeed(1.03f)
                     .build()
             )
+            .build()
+
+        player?.apply {
+            setMediaItem(mediaItem)
             prepare()
         }
     }
 
-    override fun onResume() { super.onResume(); player?.play() }
-    override fun onPause() { super.onPause(); player?.pause() }
-    override fun onStop() { super.onStop(); finish() }
-
-    override fun onDestroy() {
-        super.onDestroy()
-        releasePlayer()
+    // ==================== MONITORING ====================
+    private fun startMonitoring() {
+        monitorJob = lifecycleScope.launch(Dispatchers.Main) {
+            while (isActive) {
+                // Log do estado atual para debug
+                // Em produção, isso seria removido ou condicional
+                delay(MONITOR_INTERVAL_MS)
+            }
+        }
     }
 
-    private fun releasePlayer() {
+    // ==================== CLEANUP ====================
+    private fun releaseAllResources() {
+        // 1. Cancelar coroutines
+        monitorJob?.cancel()
+        monitorJob = null
+
+        // 2. Liberar player
         player?.apply {
-            // 1. Remover listener para evitar leak da Activity
             playerListener?.let { removeListener(it) }
-            
-            // 2. Limpar SurfaceView para evitar leak da View
             setVideoSurfaceView(null)
-            
-            // 3. Release do player
+            stop()
             release()
         }
         player = null
         playerListener = null
 
-        // 4. Limpar flag de tela ligada
-        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+        // 3. Limpar flags de window
+        window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+
+        // 4. Reset state
+        currentState = PlayerState.Idle
+        retryCount = 0
+    }
+
+    // ==================== EVENT LISTENER ====================
+    private inner class PlayerEventListener : androidx.media3.common.Player.Listener {
+        override fun onPlayerError(error: PlaybackException) {
+            val url = (currentState as? PlayerState.Loading)?.url
+                ?: (currentState as? PlayerState.Playing)?.url
+                ?: return
+
+            currentState = PlayerState.Error(error, url)
+
+            if (retryCount < MAX_RETRIES) {
+                retryCount++
+                lifecycleScope.launch(Dispatchers.Main) {
+                    delay(1000L) // Delay antes de retry
+                    player?.apply {
+                        stop()
+                        play(url)
+                    }
+                }
+            }
+        }
+
+        override fun onIsPlayingChanged(isPlaying: Boolean) {
+            if (isPlaying) {
+                val url = (currentState as? PlayerState.Loading)?.url
+                if (url != null) {
+                    currentState = PlayerState.Playing(url)
+                    retryCount = 0 // Reset retry count on successful playback
+                }
+            }
+        }
     }
 }

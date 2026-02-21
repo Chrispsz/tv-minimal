@@ -1,0 +1,49 @@
+# ============================================
+# Detekt Configuration - IPLINKS Player
+# ============================================
+
+complexity:
+  # Métodos simples podem ter mais linhas
+  LongMethod:
+    threshold: 60
+  # Classes podem ter mais métodos em Android
+  TooManyFunctions:
+    threshold: 15
+  # Complexidade cognitiva razoável
+  CognitiveComplexMethod:
+    threshold: 20
+
+style:
+  # Permitir data classes sem propriedades
+  DataClassShouldBeImmutable:
+    active: false
+  # Não exigir explicit return types em métodos simples
+  ReturnCount:
+    max: 5
+  # Permitir magic numbers em constantes
+  MagicNumber:
+    ignorePropertyDeclaration: true
+    ignoreCompanionObjectPropertyDeclaration: true
+
+exceptions:
+  # Não exigir excessão emassinada
+  TooGenericExceptionCaught:
+    active: false
+
+performance:
+  # Array<Primitive> em vez de IntArray quando necessário
+  ArrayPrimitive:
+    active: true
+
+empty-blocks:
+  # Permitir blocos vazios em callbacks
+  EmptyFunctionBlock:
+    active: false
+
+coroutines:
+  # Detectar uso incorreto de GlobalScope
+  GlobalCoroutineUsage:
+    active: true
+  # Detectar coroutines sem scope
+  InjectDispatcher:
+    active: true

@@ -27,6 +27,11 @@ android {
 
     buildTypes {
         debug {
+            isMinifyEnabled = false
+            isShrinkResources = false
+            enableUnitTestCoverage = true
+        }
+        release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles("proguard-rules.pro")
@@ -38,11 +43,50 @@ android {
         targetCompatibility = JavaVersion.VERSION_17
     }
     kotlinOptions { jvmTarget = "17" }
+    
+    testOptions {
+        unitTests.isReturnDefaultValues = true
+        unitTests.isIncludeAndroidResources = true
+    }
+    
+    // Namespace para testes
+    testNamespace = "com.iplinks.player.test"
 }
 
 dependencies {
-    // CORE ONLY - minimum dependencies for HLS player
+    // CORE
     implementation("androidx.core:core:1.12.0")
+    implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.7.0")
+    
+    // MEDIA3 EXOPLAYER
     implementation("androidx.media3:media3-exoplayer:1.2.1")
     implementation("androidx.media3:media3-exoplayer-hls:1.2.1")
+    
+    // LEAKCANARY - Detecção de memory leaks (apenas debug)
+    debugImplementation("com.squareup.leakcanary:leakcanary-android:2.13")
+    
+    // TESTES
+    testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("io.mockk:mockk:1.13.10")
+    testImplementation("app.cash.turbine:turbine:1.0.0")  // Test Flow
+}
+
+// ============================================
+// TESTES AUTOMÁTICOS EM TODOS OS BUILDS
+// ============================================
+
+// Testes rodam antes de QUALQUER build
+tasks.named("assembleDebug").configure { dependsOn("testDebugUnitTest") }
+tasks.named("assembleRelease").configure { dependsOn("testReleaseUnitTest") }
+
+// Relatório de cobertura
+tasks.register("testReport") {
+    dependsOn("testDebugUnitTest")
+    doLast {
+        val reportDir = file("build/reports/tests/testDebugUnitTest")
+        println("\n" + "=".repeat(50))
+        println("📊 TEST REPORT: ${reportDir.absolutePath}/index.html")
+        println("=".repeat(50) + "\n")
+    }
 }
