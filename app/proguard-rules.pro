@@ -1,55 +1,109 @@
 # ============================================
-# IPLINKS Player - ProGuard Rules
+# IPLINKS Player - ProGuard Rules (AGRESSIVO)
 # ============================================
 
-# ExoPlayer/Media3 - Keep all native and reflection
+# ==================== MEDIA3 / EXOPLAYER ====================
 -keep class androidx.media3.** { *; }
 -dontwarn androidx.media3.**
 
-# Lifecycle - Keep for lifecycleScope
+# ==================== LIFECYCLE ====================
 -keep class androidx.lifecycle.** { *; }
 -keepclassmembers class androidx.lifecycle.** { *; }
 
-# Keep PlayerActivity for AndroidManifest
+# ==================== PLAYER ACTIVITY ====================
 -keep public class com.iplinks.player.PlayerActivity { *; }
 -keep public class com.iplinks.player.PlayerActivity$* { *; }
 
-# Keep sealed interfaces and their implementations
+# Sealed interfaces e implementações
 -keep class com.iplinks.player.PlayerActivity$PlayerState { *; }
 -keep class com.iplinks.player.PlayerActivity$PlayerState$* { *; }
--keep class com.iplinks.player.PlayerActivity$ErrorClassification { *; }
--keep class com.iplinks.player.PlayerActivity$ErrorClassification$* { *; }
--keep class com.iplinks.player.PlayerActivity$ValidatedUrl { *; }
 
-# Optimization settings
--optimizationpasses 5
--dontusemixedcaseclassnames
--dontskipnonpubliclibraryclasses
--verbose
-
-# Aggressive optimizations
--optimizations !code/simplification/arithmetic,!field/*,!class/merging/*,!code/allocation/variable
-
-# Remove debug logs in release (shrinks APK)
--assumenosideeffects class android.util.Log {
-    public static *** d(...);
-    public static *** v(...);
-    public static *** i(...);
+# Value classes (inline classes)
+-keepclassmembers class com.iplinks.player.PlayerActivity$ValidatedUrl {
+    public java.lang.String getUrl();
+}
+-keepclassmembers class com.iplinks.player.PlayerActivity$RetryCount {
+    public int getValue();
 }
 
-# Keep native methods
--keepclasseswithmembernames class * {
-    native <methods>;
+# ==================== KOTLIN OPTIMIZATIONS ====================
+# Keep Kotlin Metadata for reflection-free operations
+-keep class kotlin.Metadata { *; }
+
+# Kotlin inline functions
+-keepclassmembers class **$WhenMappings {
+    <fields>;
 }
 
-# Kotlin coroutines
+# Coroutines
 -keepclassmembers class kotlinx.coroutines.** {
     volatile <fields>;
 }
 -keepnames class kotlinx.coroutines.internal.MainDispatcherFactory {}
 -keepnames class kotlinx.coroutines.CoroutineExceptionHandler {}
+-keepnames class kotlinx.coroutines.Dispatchers { *; }
 
-# Kotlin inline classes (value classes)
--keepclassmembers class com.iplinks.player.PlayerActivity$ValidatedUrl {
-    public java.lang.String getUrl();
+# Value classes / Inline classes
+-keepclassmembers class **.**$** {
+    public <methods>;
+}
+
+# ==================== AGRESSIVE OPTIMIZATIONS ====================
+-optimizationpasses 7
+-dontusemixedcaseclassnames
+-dontskipnonpubliclibraryclasses
+-verbose
+
+# Aggressive optimizations - remove dead code
+-optimizations !code/simplification/arithmetic,!field/*,!class/merging/*,!code/allocation/variable
+
+# ==================== REMOVE DEBUG CODE ====================
+# Remove ALL logging in release (zero overhead)
+-assumenosideeffects class android.util.Log {
+    public static *** d(...);
+    public static *** v(...);
+    public static *** i(...);
+    public static *** w(...);
+    public static *** e(...);
+    public static *** wtf(...);
+}
+
+# Remove System.out and System.err
+-assumenosideeffects class java.io.PrintStream {
+    public *** println(...);
+    public *** print(...);
+    public *** printf(...);
+}
+
+# Remove StringBuilder debug
+-assumenosideeffects class java.lang.StringBuilder {
+    public *** append(java.lang.String);
+    public *** toString();
+}
+
+# ==================== REMOVE ASSERTIONS ====================
+-assumenosideeffects class kotlin.jvm.internal.Intrinsics {
+    public static *** checkNotNull(...);
+    public static *** checkNotNullParameter(...);
+    public static *** checkExpressionValueIsNotNull(...);
+    public static *** checkNotNullExpressionValue(...);
+    public static *** checkReturnedValueIsNotNull(...);
+    public static *** checkFieldIsNotNull(...);
+    public static *** checkParameterIsNotNull(...);
+}
+
+# ==================== NATIVE METHODS ====================
+-keepclasseswithmembernames class * {
+    native <methods>;
+}
+
+# ==================== ENUMS ====================
+-keepclassmembers enum * {
+    public static **[] values();
+    public static ** valueOf(java.lang.String);
+}
+
+# ==================== PARCELABLE ====================
+-keepclassmembers class * implements android.os.Parcelable {
+    public static final android.os.Parcelable$Creator CREATOR;
 }
