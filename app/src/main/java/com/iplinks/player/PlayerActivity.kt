@@ -4,9 +4,11 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.util.Log
 import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.widget.Toast
 import android.webkit.URLUtil
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
@@ -18,6 +20,7 @@ import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.C
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
@@ -120,6 +123,8 @@ class PlayerActivity : Activity(), LifecycleOwner {
         const val MONITOR_INTERVAL_MS = 5_000L
         const val BASE_RETRY_DELAY_MS = 1_000L
         const val JITTER_MAX_MS = 500L
+        const val TAG = "PlayerActivity"
+        const val USER_AGENT = "IPLinksPlayer/1.0 (Android TV)"
     }
 
     // ==================== LIFECYCLE ====================
@@ -129,12 +134,20 @@ class PlayerActivity : Activity(), LifecycleOwner {
         super.onCreate(savedInstanceState)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         
-        val url = resolveUrl(intent)?.let { validateUrl(it) }
+        Log.d(TAG, "onCreate: intent=$intent, data=${intent?.data}, extras=${intent?.extras}")
+        
+        val rawUrl = resolveUrl(intent)
+        Log.d(TAG, "onCreate: rawUrl=$rawUrl")
+        
+        val url = rawUrl?.let { validateUrl(it) }
         if (url == null) {
+            Log.e(TAG, "onCreate: URL inválida ou não fornecida")
+            showError("URL inválida ou não fornecida")
             finish()
             return
         }
 
+        Log.d(TAG, "onCreate: url validada=${url.url}")
         setupWindow()
         setupUI()
         startMonitoring()
@@ -187,20 +200,46 @@ class PlayerActivity : Activity(), LifecycleOwner {
      */
     @Suppress("NOTHING_TO_INLINE")
     private inline fun resolveUrl(intent: Intent): String? {
-        return intent.data?.toString()
-            ?: intent.getStringExtra(Intent.EXTRA_TEXT)
-            ?: intent.getStringExtra("stream_url")
-            ?: intent.getStringExtra("url")
+        // Prioridade: data URI > EXTRA_TEXT > stream_url > url
+        val dataString = intent.data?.toString()
+        if (!dataString.isNullOrBlank()) return dataString
+        
+        val extraText = intent.getStringExtra(Intent.EXTRA_TEXT)
+        if (!extraText.isNullOrBlank()) return extraText
+        
+        val streamUrl = intent.getStringExtra("stream_url")
+        if (!streamUrl.isNullOrBlank()) return streamUrl
+        
+        val url = intent.getStringExtra("url")
+        if (!url.isNullOrBlank()) return url
+        
+        return null
     }
 
     private fun validateUrl(rawUrl: String): ValidatedUrl? {
         val trimmed = rawUrl.trim()
-        if (!URLUtil.isNetworkUrl(trimmed)) return null
+        Log.d(TAG, "validateUrl: trimmed=$trimmed")
+        
+        // Aceita http, https, rtsp, rtmp
+        val validSchemes = listOf("http://", "https://", "rtsp://", "rtmp://")
+        val isValidScheme = validSchemes.any { trimmed.startsWith(it, ignoreCase = true) }
+        
+        if (!isValidScheme) {
+            Log.e(TAG, "validateUrl: scheme inválido, deve ser http/https/rtsp/rtmp")
+            return null
+        }
         
         return try {
             val uri = Uri.parse(trimmed)
-            if (uri.host.isNullOrBlank()) null else ValidatedUrl(trimmed)
-        } catch (_: Exception) {
+            if (uri.host.isNullOrBlank()) {
+                Log.e(TAG, "validateUrl: host vazio")
+                null
+            } else {
+                Log.d(TAG, "validateUrl: URL válida, host=${uri.host}")
+                ValidatedUrl(trimmed)
+            }
+        } catch (e: Exception) {
+            Log.e(TAG, "validateUrl: exceção ao parsear URL", e)
             null
         }
     }
@@ -232,6 +271,15 @@ class PlayerActivity : Activity(), LifecycleOwner {
 
     // ==================== PLAYER ====================
     private fun initializePlayer(surfaceView: SurfaceView) {
+        Log.d(TAG, "initializePlayer: iniciando...")
+        
+        // HTTP DataSource com User-Agent customizado
+        val httpDataSourceFactory = DefaultHttpDataSource.Factory()
+            .setUserAgent(USER_AGENT)
+            .setAllowCrossProtocolRedirects(true)
+            .setConnectTimeoutMs(10_000)
+            .setReadTimeoutMs(20_000)
+        
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(MIN_BUFFER_MS, MAX_BUFFER_MS, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_MS)
             .setPrioritizeTimeOverSizeThresholds(true)
@@ -244,6 +292,9 @@ class PlayerActivity : Activity(), LifecycleOwner {
         playerListener = PlayerEventListener()
 
         player = ExoPlayer.Builder(this)
+            .setMediaSourceFactory(
+                androidx.media3.exoplayer.source.DefaultMediaSourceFactory(httpDataSourceFactory)
+            )
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
             .build()
@@ -252,26 +303,23 @@ class PlayerActivity : Activity(), LifecycleOwner {
                 playWhenReady = true
                 setWakeMode(C.WAKE_MODE_NETWORK)
                 playerListener?.let { addListener(it) }
+                Log.d(TAG, "initializePlayer: player criado com sucesso")
             }
     }
 
     private fun play(url: ValidatedUrl) {
+        Log.d(TAG, "play: iniciando reprodução de ${url.url}")
         currentState = PlayerState.Loading(url)
         
+        // MediaItem simples - sem LiveConfiguration (pode causar problemas com VOD)
         val mediaItem = MediaItem.Builder()
             .setUri(Uri.parse(url.url))
-            .setLiveConfiguration(
-                MediaItem.LiveConfiguration.Builder()
-                    .setTargetOffsetMs(3000L)
-                    .setMinPlaybackSpeed(0.97f)
-                    .setMaxPlaybackSpeed(1.03f)
-                    .build()
-            )
             .build()
 
         player?.apply {
             setMediaItem(mediaItem)
             prepare()
+            Log.d(TAG, "play: prepare() chamado")
         }
     }
 
@@ -358,10 +406,29 @@ class PlayerActivity : Activity(), LifecycleOwner {
         retryCount = 0
     }
 
+    // ==================== ERROR HANDLING ====================
+    private fun showError(message: String) {
+        Log.e(TAG, "showError: $message")
+        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+    }
+
     // ==================== EVENT LISTENER ====================
     private inner class PlayerEventListener : androidx.media3.common.Player.Listener {
         
+        override fun onPlaybackStateChanged(playbackState: Int) {
+            val stateName = when (playbackState) {
+                androidx.media3.common.Player.STATE_IDLE -> "IDLE"
+                androidx.media3.common.Player.STATE_BUFFERING -> "BUFFERING"
+                androidx.media3.common.Player.STATE_READY -> "READY"
+                androidx.media3.common.Player.STATE_ENDED -> "ENDED"
+                else -> "UNKNOWN($playbackState)"
+            }
+            Log.d(TAG, "onPlaybackStateChanged: $stateName")
+        }
+        
         override fun onPlayerError(error: PlaybackException) {
+            Log.e(TAG, "onPlayerError: ${error.message}, errorCode=${error.errorCode}", error)
+            
             val url = when (val state = currentState) {
                 is PlayerState.Loading -> state.url
                 is PlayerState.Playing -> state.url
@@ -372,19 +439,34 @@ class PlayerActivity : Activity(), LifecycleOwner {
 
             val retryable = isRetryableError(error)
             currentState = PlayerState.Error(error, url, retryable)
+            
+            val errorMsg = when (error.errorCode) {
+                -2001 -> "Erro HTTP (404/403) - URL não encontrada"
+                -2002 -> "Arquivo de vídeo corrompido"
+                -2003 -> "Manifesto HLS inválido"
+                -2004 -> "Arquivo não encontrado"
+                else -> "Erro de reprodução: ${error.message}"
+            }
+            
+            showError(errorMsg)
 
             if (retryable && retryCount < MAX_RETRIES) {
+                Log.d(TAG, "onPlayerError: agendando retry $retryCount/$MAX_RETRIES")
                 retryCount++
                 scheduleRetry(url)
+            } else if (!retryable || retryCount >= MAX_RETRIES) {
+                Log.e(TAG, "onPlayerError: erro não recuperável ou max retries atingido")
             }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            Log.d(TAG, "onIsPlayingChanged: isPlaying=$isPlaying")
             if (isPlaying) {
                 val url = (currentState as? PlayerState.Loading)?.url
                 if (url != null) {
                     currentState = PlayerState.Playing(url)
                     retryCount = 0
+                    Log.d(TAG, "onIsPlayingChanged: reproduzindo ${url.url}")
                 }
             }
         }
