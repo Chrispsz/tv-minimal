@@ -7,10 +7,9 @@ android {
     namespace = "com.iplinks.player"
     compileSdk = 34
 
-    // Performance: Acelera build em projetos que crescem
+    // Performance: buildConfig desativado (não usado)
     buildFeatures {
         buildConfig = false
-        nonTransitiveRClass = true
     }
 
     defaultConfig {
