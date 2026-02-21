@@ -4,8 +4,6 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import android.os.Handler
-import android.os.Looper
 import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -19,7 +17,7 @@ import androidx.media3.common.AudioAttributes
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.upstream.DefaultAllocator
 
 class PlayerActivity : Activity() {
 
@@ -27,18 +25,20 @@ class PlayerActivity : Activity() {
     private var surfaceView: SurfaceView? = null
     private var retryCount = 0
     private var currentUrl: String? = null
-    private val syncHandler = Handler(Looper.getMainLooper())
-    private var lastSyncCheckTime: Long = 0
-    private var initialPosition: Long = 0
 
     companion object {
-        private const val MIN_BUFFER_MS = 10000      // 10s - reduced for less drift
-        private const val MAX_BUFFER_MS = 30000      // 30s - reduced from 50s
-        private const val BUFFER_FOR_PLAYBACK_MS = 2500
-        private const val BUFFER_AFTER_REBUFFER_MS = 5000
+        // Buffer otimizado para HLS live streams
+        // Valores baseados em: https://www.akamai.com/blog/performance/enhancing-video-streaming-quality-for-exoplayer-part-2
+        private const val MIN_BUFFER_MS = 10000           // 10s - mínimo para evitar stuttering
+        private const val MAX_BUFFER_MS = 25000           // 25s - máximo para reduzir drift
+        private const val BUFFER_FOR_PLAYBACK_MS = 2000   // 2s - início rápido
+        private const val BUFFER_AFTER_REBUFFER_MS = 5000 // 5s - após rebuffer
+        
         private const val MAX_RETRIES = 3
-        private const val SYNC_CHECK_INTERVAL_MS = 30000L  // Check every 30s
-        private const val MAX_DRIFT_MS = 500L               // Max allowed drift
+        
+        // HLS segment duration típico é 6-10s
+        // Manter buffer alinhado com segmentos
+        private const val TARGET_LIVE_OFFSET_MS = 3000L   // 3s do live edge
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,6 +52,7 @@ class PlayerActivity : Activity() {
 
         currentUrl = url
 
+        // Essential for TV/player apps
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUI()
@@ -107,18 +108,30 @@ class PlayerActivity : Activity() {
     }
 
     private fun initPlayer() {
-        // Smaller buffer = less audio drift accumulation
+        // Allocator otimizado para streaming
+        val allocator = DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE)
+        
+        // LoadControl otimizado para HLS live
+        // Fonte: https://proandroiddev.com/preloading-media-a-future-forward-approach-with-exoplayer-877ca6b0873d
         val loadControl = DefaultLoadControl.Builder()
+            .setAllocator(allocator)
             .setBufferDurationsMs(
                 MIN_BUFFER_MS,
                 MAX_BUFFER_MS,
                 BUFFER_FOR_PLAYBACK_MS,
                 BUFFER_AFTER_REBUFFER_MS
             )
-            .setPrioritizeTimeOverSizeThresholds(true)
+            .setTargetBufferBytes(C.LENGTH_UNSET)  // Sem limite de bytes
+            .setPrioritizeTimeOverSizeThresholds(true)  // Importante para live streams
             .build()
 
-        // Audio attributes for proper handling
+        // TrackSelector com configurações padrão otimizadas
+        val trackSelector = DefaultTrackSelector(this).apply {
+            // Preferência por melhor qualidade disponível
+            setParameters(buildUponParameters().setForceHighestSupportedBitrate(true))
+        }
+
+        // Audio attributes para conteúdo de filme/TV
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
             .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
@@ -126,15 +139,16 @@ class PlayerActivity : Activity() {
 
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
-            .setTrackSelector(DefaultTrackSelector(this))
+            .setTrackSelector(trackSelector)
             .build()
             .apply {
                 setVideoSurfaceView(surfaceView)
                 playWhenReady = true
                 setAudioAttributes(audioAttributes, true)
+                setHandleAudioBecomingNoisy(true)  // Pausa ao desconectar fone
                 
-                // Handle audio becoming noisy (headphone disconnect)
-                setHandleAudioBecomingNoisy(true)
+                // Wake lock para evitar que o sistema mate o app
+                setWakeMode(C.WAKE_MODE_NETWORK)
 
                 addListener(object : androidx.media3.common.Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
@@ -150,56 +164,24 @@ class PlayerActivity : Activity() {
 
     private fun play(url: String) {
         player?.apply {
+            // MediaItem com LiveConfiguration para sincronização automática
+            // Fonte: https://developer.android.com/media/media3/exoplayer/hls
             val mediaItem = MediaItem.Builder()
                 .setUri(Uri.parse(url))
                 .setLiveConfiguration(
                     MediaItem.LiveConfiguration.Builder()
-                        .setMaxPlaybackSpeed(1.05f)    // Allow slight speedup to catch up
-                        .setMinPlaybackSpeed(0.95f)   // Allow slight slowdown
-                        .setTargetOffsetMs(3000L)     // Target 3s from live edge
+                        .setTargetOffsetMs(TARGET_LIVE_OFFSET_MS)
+                        .setMinOffsetMs(1000L)          // Mínimo 1s do live edge
+                        .setMaxOffsetMs(30000L)         // Máximo 30s do live edge
+                        .setMinPlaybackSpeed(0.97f)     // Permite desacelerar até 3%
+                        .setMaxPlaybackSpeed(1.03f)     // Permite acelerar até 3%
                         .build()
                 )
                 .build()
             
             setMediaItem(mediaItem)
             prepare()
-            
-            // Reset sync tracking
-            lastSyncCheckTime = System.currentTimeMillis()
-            initialPosition = currentPosition
-            
-            // Start periodic sync check
-            startSyncCheck()
         }
-    }
-
-    private fun startSyncCheck() {
-        syncHandler.postDelayed(object : Runnable {
-            override fun run() {
-                player?.let { p ->
-                    // Check for significant audio/video drift
-                    val currentTime = System.currentTimeMillis()
-                    val elapsed = currentTime - lastSyncCheckTime
-                    
-                    if (elapsed >= SYNC_CHECK_INTERVAL_MS) {
-                        // Calculate expected vs actual progress
-                        val expectedProgress = p.currentPosition
-                        val bufferInfo = p.bufferedPosition
-                        
-                        // If drift is too large, soft reload
-                        if (bufferInfo > 0 && (bufferInfo - expectedProgress) > MAX_DRIFT_MS) {
-                            // Seek to near live position to resync
-                            p.seekTo(maxOf(0, bufferInfo - 2000))
-                        }
-                        
-                        lastSyncCheckTime = currentTime
-                    }
-                    
-                    // Continue checking
-                    syncHandler.postDelayed(this, SYNC_CHECK_INTERVAL_MS)
-                }
-            }
-        }, SYNC_CHECK_INTERVAL_MS)
     }
 
     override fun onResume() {
@@ -219,7 +201,6 @@ class PlayerActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
-        syncHandler.removeCallbacksAndMessages(null)
         player?.release()
         player = null
         surfaceView = null
