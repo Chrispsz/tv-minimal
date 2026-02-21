@@ -7,6 +7,7 @@ import android.os.Bundle
 import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.FrameLayout
+import android.webkit.URLUtil
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
@@ -20,7 +21,6 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
-import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
@@ -35,23 +35,49 @@ import kotlinx.coroutines.launch
  * - Sealed class para estados do player
  * - Limpeza completa de recursos no onDestroy
  * - LeakCanary para detecção de leaks em debug
+ * - Exponential Backoff para retry
+ * - URLUtil para validação robusta
+ * - Value class para type-safety sem overhead
  */
 class PlayerActivity : Activity(), LifecycleOwner {
+
+    // ==================== VALUE CLASS (Zero overhead) ====================
+    /**
+     * Value class para URL validada - elimina overhead de alocação
+     * enquanto mantém type-safety
+     */
+    @JvmInline
+    value class ValidatedUrl(val url: String) {
+        init {
+            require(url.startsWith("http")) { "URL must start with http/https" }
+        }
+    }
+
+    // ==================== SEALED CLASS (Exhaustive States) ====================
+    /**
+     * Sealed class para estados do player
+     * - data object para estados sem dados (zero allocation)
+     * - data class para estados com dados (imutáveis)
+     */
+    private sealed class PlayerState {
+        data object Idle : PlayerState()
+        data object Stopped : PlayerState()
+        data class Loading(val url: ValidatedUrl) : PlayerState()
+        data class Playing(val url: ValidatedUrl) : PlayerState()
+        data class Error(
+            val exception: PlaybackException,
+            val url: ValidatedUrl,
+            val isRetryable: Boolean
+        ) : PlayerState()
+    }
 
     // ==================== STATE ====================
     private val lifecycleRegistry = LifecycleRegistry(this)
     private var player: ExoPlayer? = null
     private var playerListener: PlayerEventListener? = null
+    private var retryJob: Job? = null
     private var monitorJob: Job? = null
     private var retryCount = 0
-    
-    // Estado atual do player usando sealed class
-    private sealed class PlayerState {
-        data object Idle : PlayerState()
-        data class Loading(val url: String) : PlayerState()
-        data class Playing(val url: String) : PlayerState()
-        data class Error(val exception: PlaybackException, val url: String) : PlayerState()
-    }
     private var currentState: PlayerState = PlayerState.Idle
 
     // ==================== COMPANION ====================
@@ -61,6 +87,16 @@ class PlayerActivity : Activity(), LifecycleOwner {
         private const val BUFFER_FOR_PLAYBACK_MS = 2_000
         private const val MAX_RETRIES = 3
         private const val MONITOR_INTERVAL_MS = 5_000L
+        private const val BASE_RETRY_DELAY_MS = 1_000L
+        
+        // Error codes que NÃO devem ter retry
+        private val NON_RETRYABLE_ERROR_CODES = setOf(
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,      // 404, 403, etc
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
+            PlaybackException.ERROR_CODE_UNSPECIFIED
+        )
     }
 
     // ==================== LIFECYCLE ====================
@@ -70,8 +106,8 @@ class PlayerActivity : Activity(), LifecycleOwner {
         super.onCreate(savedInstanceState)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         
-        val url = resolveUrl(intent)?.trim()
-        if (url == null || !url.startsWith("http")) {
+        val url = resolveUrl(intent)?.let { validateUrl(it) }
+        if (url == null) {
             finish()
             return
         }
@@ -101,7 +137,6 @@ class PlayerActivity : Activity(), LifecycleOwner {
     override fun onStop() {
         super.onStop()
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
-        // Em TV, parar a activity é comum - não forçar finish
     }
 
     override fun onDestroy() {
@@ -112,21 +147,54 @@ class PlayerActivity : Activity(), LifecycleOwner {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        val url = resolveUrl(intent)?.trim()
-        if (url != null && url.startsWith("http")) {
+        val url = resolveUrl(intent)?.let { validateUrl(it) }
+        if (url != null) {
+            cancelRetry()
             retryCount = 0
             player?.stop()
             play(url)
         }
     }
 
-    // ==================== URL RESOLUTION ====================
+    // ==================== URL RESOLUTION & VALIDATION ====================
+    
+    /**
+     * Resolve URL from Intent with priority:
+     * 1. Intent data URI
+     * 2. ACTION_SEND extra text
+     * 3. Custom extras (stream_url, url)
+     */
     private fun resolveUrl(intent: Intent): String? {
-        // Prioridade: data URI > ACTION_SEND > extras
         return intent.data?.toString()
             ?: intent.getStringExtra(Intent.EXTRA_TEXT)
             ?: intent.getStringExtra("stream_url")
             ?: intent.getStringExtra("url")
+    }
+
+    /**
+     * Validate URL using Android's URLUtil (robust, no ReDoS risk)
+     * Returns ValidatedUrl if valid, null otherwise
+     */
+    private fun validateUrl(rawUrl: String): ValidatedUrl? {
+        val trimmed = rawUrl.trim()
+        
+        // Use URLUtil for robust validation (no regex ReDoS risk)
+        if (!URLUtil.isNetworkUrl(trimmed)) {
+            return null
+        }
+        
+        // Additional validation: must have a domain
+        return try {
+            val uri = Uri.parse(trimmed)
+            val host = uri.host
+            if (host.isNullOrBlank()) {
+                null
+            } else {
+                ValidatedUrl(trimmed)
+            }
+        } catch (e: Exception) {
+            null
+        }
     }
 
     // ==================== SETUP ====================
@@ -156,7 +224,6 @@ class PlayerActivity : Activity(), LifecycleOwner {
 
     // ==================== PLAYER ====================
     private fun initializePlayer(surfaceView: SurfaceView) {
-        // LoadControl otimizado para streaming
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
                 MIN_BUFFER_MS,
@@ -167,7 +234,6 @@ class PlayerActivity : Activity(), LifecycleOwner {
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
-        // TrackSelector para melhor qualidade
         val trackSelector = DefaultTrackSelector(this).apply {
             setParameters(
                 buildUponParameters()
@@ -175,10 +241,8 @@ class PlayerActivity : Activity(), LifecycleOwner {
             )
         }
 
-        // Listener como classe separada para melhor controle
         playerListener = PlayerEventListener()
 
-        // ExoPlayer instance
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
@@ -191,11 +255,11 @@ class PlayerActivity : Activity(), LifecycleOwner {
             }
     }
 
-    private fun play(url: String) {
+    private fun play(url: ValidatedUrl) {
         currentState = PlayerState.Loading(url)
         
         val mediaItem = MediaItem.Builder()
-            .setUri(Uri.parse(url))
+            .setUri(Uri.parse(url.url))
             .setLiveConfiguration(
                 MediaItem.LiveConfiguration.Builder()
                     .setTargetOffsetMs(3000L)
@@ -211,12 +275,52 @@ class PlayerActivity : Activity(), LifecycleOwner {
         }
     }
 
+    // ==================== RETRY LOGIC (Exponential Backoff) ====================
+    
+    /**
+     * Schedule retry with exponential backoff
+     * Delay = BASE_RETRY_DELAY_MS * 2^(retryCount-1)
+     * Example: 1s, 2s, 4s for retries 1, 2, 3
+     */
+    private fun scheduleRetry(url: ValidatedUrl) {
+        if (retryCount >= MAX_RETRIES) return
+        
+        // Exponential backoff: 1s, 2s, 4s
+        val delayMs = BASE_RETRY_DELAY_MS * (1 shl (retryCount - 1))
+        
+        retryJob = lifecycleScope.launch(Dispatchers.Main) {
+            if (!isActive) return@launch  // Check if coroutine is still active
+            
+            delay(delayMs)
+            
+            if (!isActive) return@launch  // Double check after delay
+            
+            player?.apply {
+                stop()
+                play(url)
+            }
+        }
+    }
+
+    private fun cancelRetry() {
+        retryJob?.cancel()
+        retryJob = null
+    }
+
+    /**
+     * Check if error is retryable
+     * - Network errors: retryable
+     * - 404/403/malformed: not retryable
+     */
+    private fun isRetryableError(error: PlaybackException): Boolean {
+        return error.errorCode !in NON_RETRYABLE_ERROR_CODES
+    }
+
     // ==================== MONITORING ====================
     private fun startMonitoring() {
         monitorJob = lifecycleScope.launch(Dispatchers.Main) {
             while (isActive) {
-                // Log do estado atual para debug
-                // Em produção, isso seria removido ou condicional
+                // Monitor loop - could add health checks here
                 delay(MONITOR_INTERVAL_MS)
             }
         }
@@ -224,11 +328,12 @@ class PlayerActivity : Activity(), LifecycleOwner {
 
     // ==================== CLEANUP ====================
     private fun releaseAllResources() {
-        // 1. Cancelar coroutines
+        // 1. Cancel all coroutines (prevents memory leaks)
+        cancelRetry()
         monitorJob?.cancel()
         monitorJob = null
 
-        // 2. Liberar player
+        // 2. Release player
         player?.apply {
             playerListener?.let { removeListener(it) }
             setVideoSurfaceView(null)
@@ -238,7 +343,7 @@ class PlayerActivity : Activity(), LifecycleOwner {
         player = null
         playerListener = null
 
-        // 3. Limpar flags de window
+        // 3. Clear window flags
         window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // 4. Reset state
@@ -248,22 +353,21 @@ class PlayerActivity : Activity(), LifecycleOwner {
 
     // ==================== EVENT LISTENER ====================
     private inner class PlayerEventListener : androidx.media3.common.Player.Listener {
+        
         override fun onPlayerError(error: PlaybackException) {
-            val url = (currentState as? PlayerState.Loading)?.url
-                ?: (currentState as? PlayerState.Playing)?.url
-                ?: return
+            val url = when (val state = currentState) {
+                is PlayerState.Loading -> state.url
+                is PlayerState.Playing -> state.url
+                else -> return
+            }
 
-            currentState = PlayerState.Error(error, url)
+            val retryable = isRetryableError(error)
+            currentState = PlayerState.Error(error, url, retryable)
 
-            if (retryCount < MAX_RETRIES) {
+            // Only retry if error is retryable and under max retries
+            if (retryable && retryCount < MAX_RETRIES) {
                 retryCount++
-                lifecycleScope.launch(Dispatchers.Main) {
-                    delay(1000L) // Delay antes de retry
-                    player?.apply {
-                        stop()
-                        play(url)
-                    }
-                }
+                scheduleRetry(url)
             }
         }
 
@@ -272,7 +376,7 @@ class PlayerActivity : Activity(), LifecycleOwner {
                 val url = (currentState as? PlayerState.Loading)?.url
                 if (url != null) {
                     currentState = PlayerState.Playing(url)
-                    retryCount = 0 // Reset retry count on successful playback
+                    retryCount = 0  // Reset on successful playback
                 }
             }
         }

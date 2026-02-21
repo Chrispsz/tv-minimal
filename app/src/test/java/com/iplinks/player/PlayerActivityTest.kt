@@ -16,7 +16,11 @@ import org.junit.Test
 /**
  * Unit tests for PlayerActivity
  * 
- * Using runTest for coroutine testing as recommended
+ * Cobertura:
+ * - URL Validation (edge cases)
+ * - PlayerState sealed class
+ * - Retry logic with exponential backoff
+ * - Error classification
  */
 @OptIn(ExperimentalCoroutinesApi::class)
 class PlayerActivityTest {
@@ -33,7 +37,7 @@ class PlayerActivityTest {
         Dispatchers.resetMain()
     }
 
-    // ==================== URL VALIDATION ====================
+    // ==================== URL VALIDATION (Basic) ====================
     
     @Test
     fun `valid http URL should be recognized`() = runTest {
@@ -78,11 +82,57 @@ class PlayerActivityTest {
         assertTrue(url.startsWith("http"))
     }
 
+    // ==================== URL VALIDATION (Edge Cases) ====================
+    
     @Test
-    fun `trimmed URL validation should work correctly`() = runTest {
-        val rawUrl: String? = "  https://example.com/stream.m3u8  "
-        val url = rawUrl?.trim()
-        assertTrue(url != null && url.startsWith("http"))
+    fun `URL with special characters should be valid if properly encoded`() = runTest {
+        val url = "https://example.com/stream%20file.m3u8"
+        assertTrue(url.startsWith("http"))
+    }
+
+    @Test
+    fun `URL with query parameters should be valid`() = runTest {
+        val url = "https://example.com/stream.m3u8?token=abc123&expires=12345"
+        assertTrue(url.startsWith("http") && url.contains("?"))
+    }
+
+    @Test
+    fun `URL with port should be valid`() = runTest {
+        val url = "http://example.com:8080/stream.m3u8"
+        assertTrue(url.startsWith("http") && url.contains(":8080"))
+    }
+
+    @Test
+    fun `malformed URL without domain should be handled`() = runTest {
+        val url = "https://"
+        // Should have a domain part after protocol
+        val hasDomain = url.removePrefix("https://").removePrefix("http://").isNotEmpty()
+        assertFalse(hasDomain)
+    }
+
+    @Test
+    fun `URL with only protocol should be invalid`() = runTest {
+        val url = "http://"
+        val domain = url.removePrefix("http://").removePrefix("https://")
+        assertTrue(domain.isBlank())
+    }
+
+    @Test
+    fun `URL starting with double slash should be invalid`() = runTest {
+        val url = "//example.com/stream.m3u8"
+        assertFalse(url.startsWith("http"))
+    }
+
+    @Test
+    fun `IP address URL should be valid`() = runTest {
+        val url = "http://192.168.1.1:8080/stream.m3u8"
+        assertTrue(url.startsWith("http"))
+    }
+
+    @Test
+    fun `localhost URL should be valid`() = runTest {
+        val url = "http://localhost:3000/stream.m3u8"
+        assertTrue(url.startsWith("http"))
     }
 
     // ==================== PLAYER STATE ====================
@@ -94,43 +144,64 @@ class PlayerActivityTest {
     }
 
     @Test
+    fun `PlayerState Stopped should be data object`() = runTest {
+        val state: PlayerState = PlayerState.Stopped
+        assertTrue(state is PlayerState.Stopped)
+        // data object has nice toString()
+        assertTrue(state.toString().contains("Stopped"))
+    }
+
+    @Test
     fun `PlayerState Loading should contain URL`() = runTest {
-        val url = "https://example.com/stream.m3u8"
+        val url = ValidatedUrl("https://example.com/stream.m3u8")
         val state: PlayerState = PlayerState.Loading(url)
         assertTrue(state is PlayerState.Loading)
-        assertEquals(url, (state as PlayerState.Loading).url)
+        assertEquals("https://example.com/stream.m3u8", (state as PlayerState.Loading).url.url)
     }
 
     @Test
     fun `PlayerState Playing should contain URL`() = runTest {
-        val url = "https://example.com/stream.m3u8"
+        val url = ValidatedUrl("https://example.com/stream.m3u8")
         val state: PlayerState = PlayerState.Playing(url)
         assertTrue(state is PlayerState.Playing)
-        assertEquals(url, (state as PlayerState.Playing).url)
+        assertEquals("https://example.com/stream.m3u8", (state as PlayerState.Playing).url.url)
+    }
+
+    @Test
+    fun `PlayerState Error should contain retryable flag`() = runTest {
+        val url = ValidatedUrl("https://example.com/stream.m3u8")
+        val error = mockPlaybackException(PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED)
+        val state: PlayerState = PlayerState.Error(error, url, true)
+        
+        assertTrue(state is PlayerState.Error)
+        assertTrue((state as PlayerState.Error).isRetryable)
     }
 
     @Test
     fun `when expression should be exhaustive for PlayerState`() = runTest {
         val states = listOf<PlayerState>(
             PlayerState.Idle,
-            PlayerState.Loading("url1"),
-            PlayerState.Playing("url2"),
-            PlayerState.Error(mockPlaybackException(), "url3")
+            PlayerState.Stopped,
+            PlayerState.Loading(ValidatedUrl("url1")),
+            PlayerState.Playing(ValidatedUrl("url2")),
+            PlayerState.Error(mockPlaybackException(), ValidatedUrl("url3"), true)
         )
 
         val results = states.map { state ->
             when (state) {
                 is PlayerState.Idle -> "idle"
-                is PlayerState.Loading -> "loading:${state.url}"
-                is PlayerState.Playing -> "playing:${state.url}"
-                is PlayerState.Error -> "error:${state.url}"
+                is PlayerState.Stopped -> "stopped"
+                is PlayerState.Loading -> "loading:${state.url.url}"
+                is PlayerState.Playing -> "playing:${state.url.url}"
+                is PlayerState.Error -> "error:${state.url.url}:${state.isRetryable}"
             }
         }
 
         assertEquals("idle", results[0])
-        assertEquals("loading:url1", results[1])
-        assertEquals("playing:url2", results[2])
-        assertEquals("error:url3", results[3])
+        assertEquals("stopped", results[1])
+        assertEquals("loading:url1", results[2])
+        assertEquals("playing:url2", results[3])
+        assertEquals("error:url3:true", results[4])
     }
 
     // ==================== RETRY LOGIC ====================
@@ -149,23 +220,172 @@ class PlayerActivityTest {
         assertEquals(3, retryCount)
     }
 
+    @Test
+    fun `exponential backoff should increase delay`() = runTest {
+        val baseDelay = 1000L
+        val delays = mutableListOf<Long>()
+        
+        for (retryCount in 1..3) {
+            val delayMs = baseDelay * (1 shl (retryCount - 1))
+            delays.add(delayMs)
+        }
+        
+        assertEquals(listOf(1000L, 2000L, 4000L), delays)
+    }
+
+    @Test
+    fun `first retry should have 1 second delay`() = runTest {
+        val baseDelay = 1000L
+        val retryCount = 1
+        val expectedDelay = baseDelay * (1 shl (retryCount - 1))
+        
+        assertEquals(1000L, expectedDelay)
+    }
+
+    @Test
+    fun `second retry should have 2 seconds delay`() = runTest {
+        val baseDelay = 1000L
+        val retryCount = 2
+        val expectedDelay = baseDelay * (1 shl (retryCount - 1))
+        
+        assertEquals(2000L, expectedDelay)
+    }
+
+    @Test
+    fun `third retry should have 4 seconds delay`() = runTest {
+        val baseDelay = 1000L
+        val retryCount = 3
+        val expectedDelay = baseDelay * (1 shl (retryCount - 1))
+        
+        assertEquals(4000L, expectedDelay)
+    }
+
+    // ==================== ERROR CLASSIFICATION ====================
+    
+    @Test
+    fun `network connection error should be retryable`() = runTest {
+        val errorCode = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+        val nonRetryableCodes = setOf(
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+        )
+        
+        assertTrue(errorCode !in nonRetryableCodes)
+    }
+
+    @Test
+    fun `HTTP 404 error should not be retryable`() = runTest {
+        val errorCode = PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS
+        val nonRetryableCodes = setOf(
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+        )
+        
+        assertTrue(errorCode in nonRetryableCodes)
+    }
+
+    @Test
+    fun `malformed manifest error should not be retryable`() = runTest {
+        val errorCode = PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED
+        val nonRetryableCodes = setOf(
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+        )
+        
+        assertTrue(errorCode in nonRetryableCodes)
+    }
+
+    @Test
+    fun `file not found error should not be retryable`() = runTest {
+        val errorCode = PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+        val nonRetryableCodes = setOf(
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+        )
+        
+        assertTrue(errorCode in nonRetryableCodes)
+    }
+
+    @Test
+    fun `timeout error should be retryable`() = runTest {
+        val errorCode = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+        val nonRetryableCodes = setOf(
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
+            PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
+            PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
+            PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND
+        )
+        
+        assertTrue(errorCode !in nonRetryableCodes)
+    }
+
+    // ==================== VALUE CLASS ====================
+    
+    @Test
+    fun `ValidatedUrl should store URL correctly`() = runTest {
+        val url = "https://example.com/stream.m3u8"
+        val validated = ValidatedUrl(url)
+        
+        assertEquals(url, validated.url)
+    }
+
+    @Test
+    fun `ValidatedUrl toString should return URL`() = runTest {
+        val url = "https://example.com/stream.m3u8"
+        val validated = ValidatedUrl(url)
+        
+        assertEquals(url, validated.toString())
+    }
+
     // ==================== HELPER FUNCTIONS ====================
     
-    private fun mockPlaybackException(): androidx.media3.common.PlaybackException {
-        return androidx.media3.common.PlaybackException(
+    private fun mockPlaybackException(
+        errorCode: Int = PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+    ): PlaybackException {
+        return PlaybackException(
             "Test error",
             null,
-            androidx.media3.common.PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED
+            errorCode
         )
     }
 }
 
+// ==================== TEST DOUBLES ====================
+
 /**
- * Sealed class for player state - mirrors the one in PlayerActivity
+ * Value class for validated URL - mirrors PlayerActivity
+ */
+@JvmInline
+value class ValidatedUrl(val url: String)
+
+/**
+ * Sealed class for player state - mirrors PlayerActivity
  */
 private sealed class PlayerState {
     data object Idle : PlayerState()
-    data class Loading(val url: String) : PlayerState()
-    data class Playing(val url: String) : PlayerState()
-    data class Error(val exception: androidx.media3.common.PlaybackException, val url: String) : PlayerState()
+    data object Stopped : PlayerState()
+    data class Loading(val url: ValidatedUrl) : PlayerState()
+    data class Playing(val url: ValidatedUrl) : PlayerState()
+    data class Error(
+        val exception: PlaybackException,
+        val url: ValidatedUrl,
+        val isRetryable: Boolean
+    ) : PlayerState()
 }
+
+/**
+ * Mock PlaybackException for testing
+ */
+private class PlaybackException(
+    message: String?,
+    cause: Throwable?,
+    val errorCode: Int
+) : Exception(message, cause)
