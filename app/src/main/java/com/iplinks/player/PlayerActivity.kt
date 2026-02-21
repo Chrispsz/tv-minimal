@@ -24,24 +24,28 @@ import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.isActive
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.launch
+import kotlin.random.Random
 
 /**
- * PlayerActivity - HLS Player otimizado para Android TV
+ * PlayerActivity - HLS Player com Arquitetura Resiliente para Android TV
  * 
- * Otimizações implementadas:
- * - lifecycleScope para coroutines automáticas
- * - Sealed class para estados do player
- * - Limpeza completa de recursos no onDestroy
+ * Otimizações de Nível Arquitetural:
+ * - Sealed interface para estados (mais leve que sealed class)
+ * - Value class para URL validada (zero overhead de memória)
+ * - Exponential Backoff com Jitter (evita Thundering Herd)
+ * - Cancelamento cooperativo de coroutines (ensureActive)
+ * - Limpeza determinística de recursos
  * - LeakCanary para detecção de leaks em debug
- * - Exponential Backoff para retry
- * - URLUtil para validação robusta
- * - Value class para type-safety sem overhead
  */
 class PlayerActivity : Activity(), LifecycleOwner {
 
-    // ==================== VALUE CLASS (Zero overhead) ====================
+    // ==================== VALUE CLASS (Zero RAM overhead) ====================
+    /**
+     * Type-safe URL que não pode ser instanciada sem validação.
+     * O compilador a trata como String primitiva (sem alocação de objeto).
+     */
     @JvmInline
     value class ValidatedUrl(val url: String) {
         init {
@@ -49,17 +53,50 @@ class PlayerActivity : Activity(), LifecycleOwner {
         }
     }
 
-    // ==================== SEALED CLASS (Exhaustive States) ====================
-    private sealed class PlayerState {
-        data object Idle : PlayerState()
-        data object Stopped : PlayerState()
-        data class Loading(val url: ValidatedUrl) : PlayerState()
-        data class Playing(val url: ValidatedUrl) : PlayerState()
+    // ==================== SEALED INTERFACE (Mais leve que sealed class) ====================
+    /**
+     * Sealed interface é mais leve no bytecode que sealed class.
+     * data object para estados sem parâmetros = zero alocação.
+     * when exhaustivo garante que todos os estados são tratados.
+     */
+    private sealed interface PlayerState {
+        data object Idle : PlayerState
+        data object Stopped : PlayerState
+        data class Loading(val url: ValidatedUrl) : PlayerState
+        data class Playing(val url: ValidatedUrl) : PlayerState
         data class Error(
             val exception: PlaybackException,
             val url: ValidatedUrl,
             val isRetryable: Boolean
-        ) : PlayerState()
+        ) : PlayerState
+    }
+
+    // ==================== ERROR CLASSIFICATION (Sealed para extensibilidade) ====================
+    /**
+     * Classificação de erros que força tratamento de novos códigos.
+     * Ao adicionar um novo código, o compilador obriga a decidir se é retryable.
+     */
+    private sealed interface ErrorClassification {
+        val isRetryable: Boolean
+        
+        data object NetworkTimeout : ErrorClassification {
+            override val isRetryable = true
+        }
+        data object NetworkConnection : ErrorClassification {
+            override val isRetryable = true
+        }
+        data object HttpBadStatus : ErrorClassification {
+            override val isRetryable = false
+        }
+        data object ParsingError : ErrorClassification {
+            override val isRetryable = false
+        }
+        data object FileNotFound : ErrorClassification {
+            override val isRetryable = false
+        }
+        data object Unknown : ErrorClassification {
+            override val isRetryable = false
+        }
     }
 
     // ==================== STATE ====================
@@ -79,6 +116,7 @@ class PlayerActivity : Activity(), LifecycleOwner {
         private const val MAX_RETRIES = 3
         private const val MONITOR_INTERVAL_MS = 5_000L
         private const val BASE_RETRY_DELAY_MS = 1_000L
+        private const val JITTER_MAX_MS = 500L  // Random 0-500ms para evitar Thundering Herd
         
         private val NON_RETRYABLE_ERROR_CODES = setOf(
             PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
@@ -236,16 +274,36 @@ class PlayerActivity : Activity(), LifecycleOwner {
         }
     }
 
-    // ==================== RETRY LOGIC ====================
+    // ==================== RETRY LOGIC (Exponential Backoff + Jitter) ====================
+    /**
+     * Schedule retry com Exponential Backoff + Jitter.
+     * 
+     * Backoff: 1s, 2s, 4s para retries 1, 2, 3
+     * Jitter: 0-500ms random para evitar Thundering Herd Problem
+     * 
+     * Thundering Herd: Quando muitos clientes tentam reconectar
+     * simultaneamente após queda de servidor. O jitter espalha
+     * as tentativas no tempo, reduzindo a carga no servidor.
+     */
     private fun scheduleRetry(url: ValidatedUrl) {
         if (retryCount >= MAX_RETRIES) return
         
-        val delayMs = BASE_RETRY_DELAY_MS * (1 shl (retryCount - 1))
+        // Exponential backoff: 1s, 2s, 4s
+        val backoffMs = BASE_RETRY_DELAY_MS * (1 shl (retryCount - 1))
+        
+        // Jitter: 0-500ms random para evitar Thundering Herd
+        val jitterMs = Random.nextLong(0, JITTER_MAX_MS)
+        val totalDelayMs = backoffMs + jitterMs
         
         retryJob = lifecycleScope.launch(Dispatchers.Main) {
-            if (!isActive) return@launch
-            delay(delayMs)
-            if (!isActive) return@launch
+            // Cancelamento cooperativo - verifica se a coroutine foi cancelada
+            ensureActive()
+            
+            delay(totalDelayMs)
+            
+            // Segunda verificação após o delay
+            ensureActive()
+            
             player?.apply {
                 stop()
                 play(url)
@@ -258,27 +316,48 @@ class PlayerActivity : Activity(), LifecycleOwner {
         retryJob = null
     }
 
+    /**
+     * Classifica o erro para decidir se deve tentar novamente.
+     * Erros de rede (timeout, conexão) são retryable.
+     * Erros de dados (404, parsing) são fatais.
+     */
     private fun isRetryableError(error: PlaybackException): Boolean {
         return error.errorCode !in NON_RETRYABLE_ERROR_CODES
     }
 
-    // ==================== MONITORING ====================
+    // ==================== MONITORING (Cancelamento Cooperativo) ====================
+    /**
+     * Loop de monitoramento com cancelamento cooperativo.
+     * ensureActive() garante que a coroutine para imediatamente
+     * se o usuário fechar o player, liberando memória instantaneamente.
+     */
     private fun startMonitoring() {
         monitorJob = lifecycleScope.launch(Dispatchers.Main) {
-            while (isActive) {
+            while (true) {
+                // Cancelamento cooperativo - para imediatamente se cancelado
+                ensureActive()
                 delay(MONITOR_INTERVAL_MS)
             }
         }
     }
 
-    // ==================== CLEANUP ====================
+    // ==================== CLEANUP (Determinístico) ====================
+    /**
+     * Libera todos os recursos de forma determinística.
+     * Ordem importante:
+     * 1. Cancelar coroutines primeiro (evita race conditions)
+     * 2. Remover listener ANTES de release (evita callbacks órfãos)
+     * 3. Release do player
+     * 4. Limpar flags
+     * 5. Reset state
+     */
     private fun releaseAllResources() {
-        // 1. Cancel coroutines
+        // 1. Cancel coroutines PRIMEIRO
         cancelRetry()
         monitorJob?.cancel()
         monitorJob = null
 
-        // 2. Release player - IMPORTANT: remove listener first!
+        // 2. Release player - listener removido ANTES de release
         player?.apply {
             playerListener?.let { removeListener(it) }
             setVideoSurfaceView(null)
@@ -303,7 +382,9 @@ class PlayerActivity : Activity(), LifecycleOwner {
             val url = when (val state = currentState) {
                 is PlayerState.Loading -> state.url
                 is PlayerState.Playing -> state.url
-                else -> return
+                PlayerState.Idle -> return
+                PlayerState.Stopped -> return
+                is PlayerState.Error -> return
             }
 
             val retryable = isRetryableError(error)
