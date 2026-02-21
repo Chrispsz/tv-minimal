@@ -182,9 +182,9 @@ class PlayerActivityTest {
         val states = listOf<PlayerState>(
             PlayerState.Idle,
             PlayerState.Stopped,
-            PlayerState.Loading(ValidatedUrl("url1")),
-            PlayerState.Playing(ValidatedUrl("url2")),
-            PlayerState.Error(mockPlaybackException(), ValidatedUrl("url3"), true)
+            PlayerState.Loading(ValidatedUrl("http://url1.com")),
+            PlayerState.Playing(ValidatedUrl("http://url2.com")),
+            PlayerState.Error(mockPlaybackException(), ValidatedUrl("http://url3.com"), true)
         )
 
         val results = states.map { state ->
@@ -199,9 +199,9 @@ class PlayerActivityTest {
 
         assertEquals("idle", results[0])
         assertEquals("stopped", results[1])
-        assertEquals("loading:url1", results[2])
-        assertEquals("playing:url2", results[3])
-        assertEquals("error:url3:true", results[4])
+        assertEquals("loading:http://url1.com", results[2])
+        assertEquals("playing:http://url2.com", results[3])
+        assertEquals("error:http://url3.com:true", results[4])
     }
 
     // ==================== RETRY LOGIC ====================
