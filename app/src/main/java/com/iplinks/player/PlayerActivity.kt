@@ -91,19 +91,24 @@ class PlayerActivity : Activity(), LifecycleOwner {
      * IntArray ao invés de Set<Int> - 5x menos RAM.
      * Mapeado diretamente para int[] do Java.
      * 
-     * Error codes que NÃO devem ter retry:
+     * Error codes que NÃO devem ter retry (erros permanentes):
      * -2001: ERROR_CODE_IO_BAD_HTTP_STATUS (404, 403)
      * -2002: ERROR_CODE_PARSING_CONTAINER_MALFORMED
      * -2003: ERROR_CODE_PARSING_MANIFEST_MALFORMED
      * -2004: ERROR_CODE_IO_FILE_NOT_FOUND
-     * Int.MIN_VALUE: ERROR_CODE_UNSPECIFIED
+     * 
+     * Error codes que DEVEM ter retry (erros temporários):
+     * 1001: ERROR_CODE_IO_UNSPECIFIED
+     * 1002: ERROR_CODE_IO_NETWORK_CONNECTION_FAILED (ConnectException)
+     * 1003: ERROR_CODE_IO_NETWORK_CONNECTION_TIMEOUT
+     * 1004: ERROR_CODE_IO_NETWORK_SERVER_TIMEOUT
      */
     private val nonRetryableErrorCodes = intArrayOf(
-        -2001,  // IO_BAD_HTTP_STATUS
+        -2001,  // IO_BAD_HTTP_STATUS (404/403 - arquivo não existe)
         -2002,  // PARSING_CONTAINER_MALFORMED
         -2003,  // PARSING_MANIFEST_MALFORMED
-        -2004,  // IO_FILE_NOT_FOUND
-        Int.MIN_VALUE  // UNSPECIFIED
+        -2004   // IO_FILE_NOT_FOUND
+        // NOTA: 1001, 1002, 1003, 1004 são erros de REDE e DEVEM ter retry!
     )
 
     // ==================== STATE (Imutabilidade total) ====================
@@ -120,10 +125,10 @@ class PlayerActivity : Activity(), LifecycleOwner {
         const val MIN_BUFFER_MS = 10_000
         const val MAX_BUFFER_MS = 25_000
         const val BUFFER_FOR_PLAYBACK_MS = 2_000
-        const val MAX_RETRIES = 3
+        const val MAX_RETRIES = 5  // Aumentado para melhor recuperação de rede
         const val MONITOR_INTERVAL_MS = 5_000L
-        const val BASE_RETRY_DELAY_MS = 1_000L
-        const val JITTER_MAX_MS = 500L
+        const val BASE_RETRY_DELAY_MS = 2_000L  // 2s base para retry
+        const val JITTER_MAX_MS = 1_000L
         const val TAG = "PlayerActivity"
         const val USER_AGENT = "IPLinksPlayer/1.0 (Android TV)"
     }
@@ -454,18 +459,35 @@ class PlayerActivity : Activity(), LifecycleOwner {
             val retryable = isRetryableError(error)
             currentState = PlayerState.Error(error, url, retryable)
             
+            // Mensagens de erro amigáveis em português
             val errorMsg = when (error.errorCode) {
-                -2001 -> "Erro HTTP (404/403) - URL não encontrada"
+                // Erros de rede (RECUPERÁVEIS)
+                1001 -> "Problema de conexão - tentando reconectar..."
+                1002 -> "Falha de conexão com servidor - tentando novamente..."
+                1003 -> "Tempo de conexão esgotado - tentando novamente..."
+                1004 -> "Servidor demorou para responder - tentando novamente..."
+                
+                // Erros permanentes (NÃO RECUPERÁVEIS)
+                -2001 -> "Canal não encontrado (404/403)"
                 -2002 -> "Arquivo de vídeo corrompido"
-                -2003 -> "Manifesto HLS inválido"
-                -2004 -> "Arquivo não encontrado"
-                else -> "Erro de reprodução: ${error.message}"
+                -2003 -> "Lista de canais inválida"
+                -2004 -> "Arquivo não encontrado no servidor"
+                
+                // Outros erros
+                else -> {
+                    val cause = error.cause?.javaClass?.simpleName ?: "Desconhecido"
+                    "Erro: $cause"
+                }
             }
             
-            showError(errorMsg)
+            // Mostra mensagem apenas se não for retry automático
+            if (!retryable || retryCount >= MAX_RETRIES) {
+                showError(errorMsg)
+            } else {
+                Log.d(TAG, "onPlayerError: $errorMsg (retry $retryCount/$MAX_RETRIES)")
+            }
 
             if (retryable && retryCount < MAX_RETRIES) {
-                Log.d(TAG, "onPlayerError: agendando retry $retryCount/$MAX_RETRIES")
                 retryCount++
                 scheduleRetry(url)
             } else if (!retryable || retryCount >= MAX_RETRIES) {
