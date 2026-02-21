@@ -21,10 +21,11 @@ class PlayerActivity : Activity() {
 
     private var player: ExoPlayer? = null
     private var retryCount = 0
+    private var playerListener: androidx.media3.common.Player.Listener? = null
 
     companion object {
-        private const val MIN_BUFFER_MS = 10000      // 10s mínimo
-        private const val MAX_BUFFER_MS = 25000      // 25s máximo
+        private const val MIN_BUFFER_MS = 10000
+        private const val MAX_BUFFER_MS = 25000
         private const val BUFFER_FOR_PLAYBACK_MS = 2000
         private const val MAX_RETRIES = 3
     }
@@ -49,16 +50,13 @@ class PlayerActivity : Activity() {
     }
 
     private fun getUrlFromIntent(intent: Intent): String? {
-        // URL direta
         intent.data?.toString()?.takeIf { it.startsWith("http") }?.let { return it }
 
-        // Texto compartilhado
         if (intent.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()
                 ?.takeIf { it.startsWith("http") }?.let { return it }
         }
 
-        // Extras
         return intent.getStringExtra("stream_url") ?: intent.getStringExtra("url")
     }
 
@@ -85,6 +83,22 @@ class PlayerActivity : Activity() {
             setParameters(buildUponParameters().setForceHighestSupportedBitrate(true))
         }
 
+        // Listener como propriedade para poder remover depois
+        playerListener = object : androidx.media3.common.Player.Listener {
+            override fun onPlayerError(error: PlaybackException) {
+                player?.currentMediaItem?.let {
+                    if (retryCount < MAX_RETRIES) {
+                        retryCount++
+                        player?.apply {
+                            stop()
+                            setMediaItem(it)
+                            prepare()
+                        }
+                    }
+                }
+            }
+        }
+
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
             .setTrackSelector(trackSelector)
@@ -93,18 +107,7 @@ class PlayerActivity : Activity() {
                 setVideoSurfaceView(surfaceView)
                 playWhenReady = true
                 setWakeMode(C.WAKE_MODE_NETWORK)
-                addListener(object : androidx.media3.common.Player.Listener {
-                    override fun onPlayerError(error: PlaybackException) {
-                        currentMediaItem?.let {
-                            if (retryCount < MAX_RETRIES) {
-                                retryCount++
-                                stop()
-                                setMediaItem(it)
-                                prepare()
-                            }
-                        }
-                    }
-                })
+                addListener(playerListener!!)
             }
     }
 
@@ -129,5 +132,27 @@ class PlayerActivity : Activity() {
     override fun onResume() { super.onResume(); player?.play() }
     override fun onPause() { super.onPause(); player?.pause() }
     override fun onStop() { super.onStop(); finish() }
-    override fun onDestroy() { super.onDestroy(); player?.release(); player = null }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        releasePlayer()
+    }
+
+    private fun releasePlayer() {
+        player?.apply {
+            // 1. Remover listener para evitar leak da Activity
+            playerListener?.let { removeListener(it) }
+            
+            // 2. Limpar SurfaceView para evitar leak da View
+            setVideoSurfaceView(null)
+            
+            // 3. Release do player
+            release()
+        }
+        player = null
+        playerListener = null
+
+        // 4. Limpar flag de tela ligada
+        window.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
+    }
 }
