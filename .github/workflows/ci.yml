@@ -5,7 +5,7 @@ on:
     branches: [ main, master, develop ]
   pull_request:
     branches: [ main, master ]
-  workflow_dispatch:  # Permite rodar manualmente
+  workflow_dispatch:
 
 jobs:
   build:
@@ -43,14 +43,6 @@ jobs:
           app/build/test-results/
         retention-days: 7
 
-    - name: 📊 Upload Detekt Reports
-      uses: actions/upload-artifact@v4
-      if: always()
-      with:
-        name: detekt-reports
-        path: app/build/reports/detekt/
-        retention-days: 7
-
     - name: 🏗️ Build Debug APK
       run: ./gradlew assembleDebug
 
@@ -61,13 +53,46 @@ jobs:
         path: app/build/outputs/apk/debug/*.apk
         retention-days: 7
 
-    - name: 📋 Print Test Summary
+    # ==================== RELEASE BUILD ====================
+    
+    - name: 🔐 Create Debug Keystore
+      run: |
+        mkdir -p ~/.android
+        echo "Creating debug keystore..."
+        keytool -genkey -v -keystore ~/.android/debug.keystore -storepass android -alias androiddebugkey -keypass android -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=Android Debug,O=Android,C=US" 2>/dev/null || true
+
+    - name: 🚀 Build Release APK (Optimized)
+      run: ./gradlew assembleRelease --stacktrace
+
+    - name: 📦 Upload Release APK
+      uses: actions/upload-artifact@v4
+      with:
+        name: release-apk
+        path: app/build/outputs/apk/release/*.apk
+        retention-days: 30
+
+    - name: 📋 Print Build Summary
       if: always()
       run: |
-        echo "## 📊 Test Summary" >> $GITHUB_STEP_SUMMARY
+        echo "## 📊 Build Summary" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
-        if [ -f "app/build/reports/tests/testDebugUnitTest/index.html" ]; then
-          echo "✅ Tests completed. Download the test-reports artifact for details." >> $GITHUB_STEP_SUMMARY
-        else
-          echo "❌ Tests failed or no report generated." >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### APK Sizes:" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        if [ -f "app/build/outputs/apk/debug/app-debug.apk" ]; then
+          DEBUG_SIZE=$(du -h app/build/outputs/apk/debug/app-debug.apk | cut -f1)
+          echo "- **Debug APK**: ${DEBUG_SIZE}" >> $GITHUB_STEP_SUMMARY
         fi
+        if [ -f "app/build/outputs/apk/release/app-release.apk" ]; then
+          RELEASE_SIZE=$(du -h app/build/outputs/apk/release/app-release.apk | cut -f1)
+          echo "- **Release APK**: ${RELEASE_SIZE}" >> $GITHUB_STEP_SUMMARY
+        fi
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### Otimizações Aplicadas:" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ R8 Full Mode com 7 passes de otimização" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Remoção de TODOS os logs" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Remoção de assertions e debug code" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Resource shrinking (recursos não usados)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ ABI split (armeabi-v7a apenas)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Value classes (zero overhead)" >> $GITHUB_STEP_SUMMARY
+        echo "- ✅ Inline functions (sem alocação)" >> $GITHUB_STEP_SUMMARY

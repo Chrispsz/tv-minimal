@@ -21,6 +21,17 @@ android {
         resourceConfigurations += setOf("en")
     }
 
+    // Debug keystore padrão do Android SDK
+    signingConfigs {
+        getByName("debug") {
+            // Usa o debug.keystore padrão do Android SDK
+            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            storePassword = "android"
+            keyAlias = "androiddebugkey"
+            keyPassword = "android"
+        }
+    }
+
     splits {
         abi {
             isEnable = true
@@ -34,13 +45,15 @@ android {
         debug {
             isMinifyEnabled = false
             isShrinkResources = false
-            // Desativado para builds mais rápidos
             enableUnitTestCoverage = false
+            signingConfig = signingConfigs.getByName("debug")
         }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles("proguard-rules.pro")
+            // Assina com debug keystore para distribuição de testes
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
@@ -78,14 +91,4 @@ dependencies {
 afterEvaluate {
     tasks.findByName("assembleDebug")?.dependsOn("testDebugUnitTest")
     tasks.findByName("assembleRelease")?.dependsOn("testReleaseUnitTest")
-}
-
-tasks.register("testReport") {
-    dependsOn("testDebugUnitTest")
-    doLast {
-        val reportDir = file("build/reports/tests/testDebugUnitTest")
-        println("\n" + "=".repeat(50))
-        println("📊 TEST REPORT: ${reportDir.absolutePath}/index.html")
-        println("=".repeat(50) + "\n")
-    }
 }
