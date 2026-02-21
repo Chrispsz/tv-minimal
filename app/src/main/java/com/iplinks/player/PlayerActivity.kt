@@ -61,10 +61,6 @@ class PlayerActivity : Activity(), LifecycleOwner {
         private const val BUFFER_FOR_PLAYBACK_MS = 2_000
         private const val MAX_RETRIES = 3
         private const val MONITOR_INTERVAL_MS = 5_000L
-        
-        // Inline function para evitar overhead de lambda
-        private inline fun String?.isValidUrl(): Boolean =
-            this != null && trim().startsWith("http")
     }
 
     // ==================== LIFECYCLE ====================
@@ -74,8 +70,8 @@ class PlayerActivity : Activity(), LifecycleOwner {
         super.onCreate(savedInstanceState)
         lifecycleRegistry.currentState = Lifecycle.State.CREATED
         
-        val url = resolveUrl(intent)
-        if (!url.isValidUrl()) {
+        val url = resolveUrl(intent)?.trim()
+        if (url == null || !url.startsWith("http")) {
             finish()
             return
         }
@@ -83,7 +79,7 @@ class PlayerActivity : Activity(), LifecycleOwner {
         setupWindow()
         setupUI()
         startMonitoring()
-        play(url.trim())
+        play(url)
     }
 
     override fun onStart() {
@@ -116,10 +112,11 @@ class PlayerActivity : Activity(), LifecycleOwner {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        resolveUrl(intent)?.takeIf { it.isValidUrl() }?.let { url ->
+        val url = resolveUrl(intent)?.trim()
+        if (url != null && url.startsWith("http")) {
             retryCount = 0
             player?.stop()
-            play(url.trim())
+            play(url)
         }
     }
 
