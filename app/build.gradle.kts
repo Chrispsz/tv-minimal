@@ -49,7 +49,6 @@ android {
         unitTests.isIncludeAndroidResources = true
     }
     
-    // Namespace para testes
     testNamespace = "com.iplinks.player.test"
 }
 
@@ -69,16 +68,18 @@ dependencies {
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.0")
     testImplementation("junit:junit:4.13.2")
     testImplementation("io.mockk:mockk:1.13.10")
-    testImplementation("app.cash.turbine:turbine:1.0.0")  // Test Flow
+    testImplementation("app.cash.turbine:turbine:1.0.0")
 }
 
 // ============================================
 // TESTES AUTOMÁTICOS EM TODOS OS BUILDS
 // ============================================
 
-// Testes rodam antes de QUALQUER build
-tasks.named("assembleDebug").configure { dependsOn("testDebugUnitTest") }
-tasks.named("assembleRelease").configure { dependsOn("testReleaseUnitTest") }
+// Usar afterEvaluate para garantir que as tasks existam
+afterEvaluate {
+    tasks.findByName("assembleDebug")?.dependsOn("testDebugUnitTest")
+    tasks.findByName("assembleRelease")?.dependsOn("testReleaseUnitTest")
+}
 
 // Relatório de cobertura
 tasks.register("testReport") {
