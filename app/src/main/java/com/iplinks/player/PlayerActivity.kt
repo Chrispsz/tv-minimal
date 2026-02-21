@@ -26,6 +26,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
+import java.lang.ref.WeakReference
 
 /**
  * PlayerActivity - HLS Player otimizado para Android TV
@@ -77,8 +78,12 @@ class PlayerActivity : Activity(), LifecycleOwner {
     private var playerListener: PlayerEventListener? = null
     private var retryJob: Job? = null
     private var monitorJob: Job? = null
-    private var retryCount = 0
-    private var currentState: PlayerState = PlayerState.Idle
+    
+    // Internal para acesso pelo PlayerEventListener (WeakReference pattern)
+    internal var retryCount = 0
+        private set
+    internal var currentState: PlayerState = PlayerState.Idle
+        private set
 
     // ==================== COMPANION ====================
     companion object {
@@ -282,7 +287,7 @@ class PlayerActivity : Activity(), LifecycleOwner {
      * Delay = BASE_RETRY_DELAY_MS * 2^(retryCount-1)
      * Example: 1s, 2s, 4s for retries 1, 2, 3
      */
-    private fun scheduleRetry(url: ValidatedUrl) {
+    internal fun scheduleRetry(url: ValidatedUrl) {
         if (retryCount >= MAX_RETRIES) return
         
         // Exponential backoff: 1s, 2s, 4s
@@ -312,7 +317,7 @@ class PlayerActivity : Activity(), LifecycleOwner {
      * - Network errors: retryable
      * - 404/403/malformed: not retryable
      */
-    private fun isRetryableError(error: PlaybackException): Boolean {
+    internal fun isRetryableError(error: PlaybackException): Boolean {
         return error.errorCode !in NON_RETRYABLE_ERROR_CODES
     }
 
@@ -351,32 +356,47 @@ class PlayerActivity : Activity(), LifecycleOwner {
         retryCount = 0
     }
 
-    // ==================== EVENT LISTENER ====================
-    private inner class PlayerEventListener : androidx.media3.common.Player.Listener {
+    // ==================== EVENT LISTENER (WeakReference - No Memory Leak) ====================
+    /**
+     * PlayerEventListener usa WeakReference para evitar memory leaks.
+     * 
+     * Se a Activity for destruída enquanto o player ainda existe,
+     * a referência fraca permite que a Activity seja garbage collected.
+     * 
+     * IMPORTANTE: Sempre verificar se activityRef.get() != null antes de usar.
+     */
+    private class PlayerEventListener(
+        activity: PlayerActivity
+    ) : androidx.media3.common.Player.Listener {
+        
+        private val activityRef: WeakReference<PlayerActivity> = WeakReference(activity)
         
         override fun onPlayerError(error: PlaybackException) {
-            val url = when (val state = currentState) {
+            val activity = activityRef.get() ?: return
+            
+            val url = when (val state = activity.currentState) {
                 is PlayerState.Loading -> state.url
                 is PlayerState.Playing -> state.url
                 else -> return
             }
 
-            val retryable = isRetryableError(error)
-            currentState = PlayerState.Error(error, url, retryable)
+            val retryable = activity.isRetryableError(error)
+            activity.currentState = PlayerState.Error(error, url, retryable)
 
-            // Only retry if error is retryable and under max retries
-            if (retryable && retryCount < MAX_RETRIES) {
-                retryCount++
-                scheduleRetry(url)
+            if (retryable && activity.retryCount < MAX_RETRIES) {
+                activity.retryCount++
+                activity.scheduleRetry(url)
             }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
+            val activity = activityRef.get() ?: return
+            
             if (isPlaying) {
-                val url = (currentState as? PlayerState.Loading)?.url
+                val url = (activity.currentState as? PlayerState.Loading)?.url
                 if (url != null) {
-                    currentState = PlayerState.Playing(url)
-                    retryCount = 0  // Reset on successful playback
+                    activity.currentState = PlayerState.Playing(url)
+                    activity.retryCount = 0
                 }
             }
         }
