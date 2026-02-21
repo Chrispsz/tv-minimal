@@ -26,7 +26,6 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
-import java.lang.ref.WeakReference
 
 /**
  * PlayerActivity - HLS Player otimizado para Android TV
@@ -43,10 +42,6 @@ import java.lang.ref.WeakReference
 class PlayerActivity : Activity(), LifecycleOwner {
 
     // ==================== VALUE CLASS (Zero overhead) ====================
-    /**
-     * Value class para URL validada - elimina overhead de alocação
-     * enquanto mantém type-safety
-     */
     @JvmInline
     value class ValidatedUrl(val url: String) {
         init {
@@ -55,11 +50,6 @@ class PlayerActivity : Activity(), LifecycleOwner {
     }
 
     // ==================== SEALED CLASS (Exhaustive States) ====================
-    /**
-     * Sealed class para estados do player
-     * - data object para estados sem dados (zero allocation)
-     * - data class para estados com dados (imutáveis)
-     */
     private sealed class PlayerState {
         data object Idle : PlayerState()
         data object Stopped : PlayerState()
@@ -78,25 +68,20 @@ class PlayerActivity : Activity(), LifecycleOwner {
     private var playerListener: PlayerEventListener? = null
     private var retryJob: Job? = null
     private var monitorJob: Job? = null
-    
-    // Internal para acesso pelo PlayerEventListener (WeakReference pattern)
-    internal var retryCount = 0
-        private set
-    internal var currentState: PlayerState = PlayerState.Idle
-        private set
+    private var retryCount = 0
+    private var currentState: PlayerState = PlayerState.Idle
 
     // ==================== COMPANION ====================
     companion object {
-        private const val MIN_BUFFER_MS = 10_000      // 10s - buffer mínimo
-        private const val MAX_BUFFER_MS = 25_000      // 25s - buffer máximo  
+        private const val MIN_BUFFER_MS = 10_000
+        private const val MAX_BUFFER_MS = 25_000
         private const val BUFFER_FOR_PLAYBACK_MS = 2_000
         private const val MAX_RETRIES = 3
         private const val MONITOR_INTERVAL_MS = 5_000L
         private const val BASE_RETRY_DELAY_MS = 1_000L
         
-        // Error codes que NÃO devem ter retry
         private val NON_RETRYABLE_ERROR_CODES = setOf(
-            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,      // 404, 403, etc
+            PlaybackException.ERROR_CODE_IO_BAD_HTTP_STATUS,
             PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED,
             PlaybackException.ERROR_CODE_PARSING_MANIFEST_MALFORMED,
             PlaybackException.ERROR_CODE_IO_FILE_NOT_FOUND,
@@ -162,13 +147,6 @@ class PlayerActivity : Activity(), LifecycleOwner {
     }
 
     // ==================== URL RESOLUTION & VALIDATION ====================
-    
-    /**
-     * Resolve URL from Intent with priority:
-     * 1. Intent data URI
-     * 2. ACTION_SEND extra text
-     * 3. Custom extras (stream_url, url)
-     */
     private fun resolveUrl(intent: Intent): String? {
         return intent.data?.toString()
             ?: intent.getStringExtra(Intent.EXTRA_TEXT)
@@ -176,27 +154,13 @@ class PlayerActivity : Activity(), LifecycleOwner {
             ?: intent.getStringExtra("url")
     }
 
-    /**
-     * Validate URL using Android's URLUtil (robust, no ReDoS risk)
-     * Returns ValidatedUrl if valid, null otherwise
-     */
     private fun validateUrl(rawUrl: String): ValidatedUrl? {
         val trimmed = rawUrl.trim()
+        if (!URLUtil.isNetworkUrl(trimmed)) return null
         
-        // Use URLUtil for robust validation (no regex ReDoS risk)
-        if (!URLUtil.isNetworkUrl(trimmed)) {
-            return null
-        }
-        
-        // Additional validation: must have a domain
         return try {
             val uri = Uri.parse(trimmed)
-            val host = uri.host
-            if (host.isNullOrBlank()) {
-                null
-            } else {
-                ValidatedUrl(trimmed)
-            }
+            if (uri.host.isNullOrBlank()) null else ValidatedUrl(trimmed)
         } catch (e: Exception) {
             null
         }
@@ -230,20 +194,12 @@ class PlayerActivity : Activity(), LifecycleOwner {
     // ==================== PLAYER ====================
     private fun initializePlayer(surfaceView: SurfaceView) {
         val loadControl = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                MIN_BUFFER_MS,
-                MAX_BUFFER_MS,
-                BUFFER_FOR_PLAYBACK_MS,
-                BUFFER_FOR_PLAYBACK_MS
-            )
+            .setBufferDurationsMs(MIN_BUFFER_MS, MAX_BUFFER_MS, BUFFER_FOR_PLAYBACK_MS, BUFFER_FOR_PLAYBACK_MS)
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
         val trackSelector = DefaultTrackSelector(this).apply {
-            setParameters(
-                buildUponParameters()
-                    .setForceHighestSupportedBitrate(true)
-            )
+            setParameters(buildUponParameters().setForceHighestSupportedBitrate(true))
         }
 
         playerListener = PlayerEventListener()
@@ -280,26 +236,16 @@ class PlayerActivity : Activity(), LifecycleOwner {
         }
     }
 
-    // ==================== RETRY LOGIC (Exponential Backoff) ====================
-    
-    /**
-     * Schedule retry with exponential backoff
-     * Delay = BASE_RETRY_DELAY_MS * 2^(retryCount-1)
-     * Example: 1s, 2s, 4s for retries 1, 2, 3
-     */
-    internal fun scheduleRetry(url: ValidatedUrl) {
+    // ==================== RETRY LOGIC ====================
+    private fun scheduleRetry(url: ValidatedUrl) {
         if (retryCount >= MAX_RETRIES) return
         
-        // Exponential backoff: 1s, 2s, 4s
         val delayMs = BASE_RETRY_DELAY_MS * (1 shl (retryCount - 1))
         
         retryJob = lifecycleScope.launch(Dispatchers.Main) {
-            if (!isActive) return@launch  // Check if coroutine is still active
-            
+            if (!isActive) return@launch
             delay(delayMs)
-            
-            if (!isActive) return@launch  // Double check after delay
-            
+            if (!isActive) return@launch
             player?.apply {
                 stop()
                 play(url)
@@ -312,12 +258,7 @@ class PlayerActivity : Activity(), LifecycleOwner {
         retryJob = null
     }
 
-    /**
-     * Check if error is retryable
-     * - Network errors: retryable
-     * - 404/403/malformed: not retryable
-     */
-    internal fun isRetryableError(error: PlaybackException): Boolean {
+    private fun isRetryableError(error: PlaybackException): Boolean {
         return error.errorCode !in NON_RETRYABLE_ERROR_CODES
     }
 
@@ -325,7 +266,6 @@ class PlayerActivity : Activity(), LifecycleOwner {
     private fun startMonitoring() {
         monitorJob = lifecycleScope.launch(Dispatchers.Main) {
             while (isActive) {
-                // Monitor loop - could add health checks here
                 delay(MONITOR_INTERVAL_MS)
             }
         }
@@ -333,12 +273,12 @@ class PlayerActivity : Activity(), LifecycleOwner {
 
     // ==================== CLEANUP ====================
     private fun releaseAllResources() {
-        // 1. Cancel all coroutines (prevents memory leaks)
+        // 1. Cancel coroutines
         cancelRetry()
         monitorJob?.cancel()
         monitorJob = null
 
-        // 2. Release player
+        // 2. Release player - IMPORTANT: remove listener first!
         player?.apply {
             playerListener?.let { removeListener(it) }
             setVideoSurfaceView(null)
@@ -348,7 +288,7 @@ class PlayerActivity : Activity(), LifecycleOwner {
         player = null
         playerListener = null
 
-        // 3. Clear window flags
+        // 3. Clear flags
         window?.clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
 
         // 4. Reset state
@@ -356,47 +296,31 @@ class PlayerActivity : Activity(), LifecycleOwner {
         retryCount = 0
     }
 
-    // ==================== EVENT LISTENER (WeakReference - No Memory Leak) ====================
-    /**
-     * PlayerEventListener usa WeakReference para evitar memory leaks.
-     * 
-     * Se a Activity for destruída enquanto o player ainda existe,
-     * a referência fraca permite que a Activity seja garbage collected.
-     * 
-     * IMPORTANTE: Sempre verificar se activityRef.get() != null antes de usar.
-     */
-    private class PlayerEventListener(
-        activity: PlayerActivity
-    ) : androidx.media3.common.Player.Listener {
-        
-        private val activityRef: WeakReference<PlayerActivity> = WeakReference(activity)
+    // ==================== EVENT LISTENER ====================
+    private inner class PlayerEventListener : androidx.media3.common.Player.Listener {
         
         override fun onPlayerError(error: PlaybackException) {
-            val activity = activityRef.get() ?: return
-            
-            val url = when (val state = activity.currentState) {
+            val url = when (val state = currentState) {
                 is PlayerState.Loading -> state.url
                 is PlayerState.Playing -> state.url
                 else -> return
             }
 
-            val retryable = activity.isRetryableError(error)
-            activity.currentState = PlayerState.Error(error, url, retryable)
+            val retryable = isRetryableError(error)
+            currentState = PlayerState.Error(error, url, retryable)
 
-            if (retryable && activity.retryCount < MAX_RETRIES) {
-                activity.retryCount++
-                activity.scheduleRetry(url)
+            if (retryable && retryCount < MAX_RETRIES) {
+                retryCount++
+                scheduleRetry(url)
             }
         }
 
         override fun onIsPlayingChanged(isPlaying: Boolean) {
-            val activity = activityRef.get() ?: return
-            
             if (isPlaying) {
-                val url = (activity.currentState as? PlayerState.Loading)?.url
+                val url = (currentState as? PlayerState.Loading)?.url
                 if (url != null) {
-                    activity.currentState = PlayerState.Playing(url)
-                    activity.retryCount = 0
+                    currentState = PlayerState.Playing(url)
+                    retryCount = 0
                 }
             }
         }
