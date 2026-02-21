@@ -21,11 +21,11 @@ android {
         resourceConfigurations += setOf("en")
     }
 
-    // Debug keystore padrão do Android SDK
+    // Debug keystore - usa padrão do Android ou cria um novo
     signingConfigs {
         getByName("debug") {
-            // Usa o debug.keystore padrão do Android SDK
-            storeFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            val keystoreFile = file("${System.getProperty("user.home")}/.android/debug.keystore")
+            storeFile = keystoreFile
             storePassword = "android"
             keyAlias = "androiddebugkey"
             keyPassword = "android"
@@ -52,7 +52,7 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles("proguard-rules.pro")
-            // Assina com debug keystore para distribuição de testes
+            // Assina com debug keystore para distribuição
             signingConfig = signingConfigs.getByName("debug")
         }
     }
