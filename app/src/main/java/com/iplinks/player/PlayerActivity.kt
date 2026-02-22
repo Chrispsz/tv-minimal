@@ -10,10 +10,12 @@ import android.widget.FrameLayout
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 
 class PlayerActivity : Activity() {
@@ -29,6 +31,7 @@ class PlayerActivity : Activity() {
         private const val BUFFER_FOR_PLAYBACK_MS = 2500
         private const val BUFFER_AFTER_REBUFFER_MS = 5000
         private const val MAX_RETRIES = 3
+        private const val TAG = "PlayerActivity"
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -118,13 +121,21 @@ class PlayerActivity : Activity() {
 
                 addListener(object : androidx.media3.common.Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
-                        // Limited retry to prevent infinite loops
+                        Log.e(TAG, "Player error: ${error.message}", error)
+                        
+                        // Audio timestamp discontinuity - NÃO é erro fatal, player recupera sozinho
+                        if (error.cause is AudioSink.UnexpectedDiscontinuityException) {
+                            Log.w(TAG, "Audio discontinuity detected - auto-recovered")
+                            return
+                        }
+                        
+                        // Outros erros - retry limitado
                         if (retryCount < MAX_RETRIES && currentUrl != null) {
                             retryCount++
+                            Log.d(TAG, "Retrying ($retryCount/$MAX_RETRIES)")
                             stop()
                             play(currentUrl!!)
                         }
-                        // After MAX_RETRIES failures, silently exit
                     }
                 })
             }
