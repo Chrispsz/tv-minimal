@@ -14,7 +14,6 @@
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.Player">
 
-        <!-- singleInstance: truly single instance, no back stack -->
         <activity 
             android:name=".PlayerActivity" 
             android:exported="true"
@@ -30,15 +29,7 @@
                 <category android:name="android.intent.category.LEANBACK_LAUNCHER" />
             </intent-filter>
             
-            <!-- Custom scheme: iplinks://play?url=... -->
-            <intent-filter>
-                <action android:name="android.intent.action.VIEW" />
-                <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.BROWSABLE" />
-                <data android:scheme="iplinks" android:host="play" />
-            </intent-filter>
-            
-            <!-- Video URLs -->
+            <!-- HTTP/HTTPS video URLs -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -48,7 +39,7 @@
                 <data android:mimeType="video/*" />
             </intent-filter>
             
-            <!-- M3U8 MIME -->
+            <!-- M3U8 MIME types -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -59,7 +50,7 @@
                 <data android:mimeType="application/vnd.apple.mpegurl" />
             </intent-filter>
             
-            <!-- M3U8 extension -->
+            <!-- M3U8/M3U by extension -->
             <intent-filter>
                 <action android:name="android.intent.action.VIEW" />
                 <category android:name="android.intent.category.DEFAULT" />
@@ -71,7 +62,7 @@
                 <data android:pathPattern=".*\\.m3u" />
             </intent-filter>
             
-            <!-- Share URL -->
+            <!-- Share text (URL) -->
             <intent-filter>
                 <action android:name="android.intent.action.SEND" />
                 <category android:name="android.intent.category.DEFAULT" />
