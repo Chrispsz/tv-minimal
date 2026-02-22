@@ -1,14 +1,15 @@
-# IPLINKS Player
+# Stream Player for Android TV
 
-Minimalist IPTV player for Android TV.
+A lightweight media player for Android TV devices.
 
 ## Features
 
-- 🎬 HLS/M3U8 streaming support
-- 📺 Android TV optimized
-- ⚡ Ultra lightweight (~1.4 MB)
-- 🔄 Auto-retry on connection errors
-- 🔲 Fullscreen landscape mode
+- HLS/HTTP streaming support
+- Android TV optimized
+- Ultra lightweight (~1.4 MB)
+- Auto-retry on connection errors
+- Fullscreen landscape mode
+- Audio sync correction for live streams
 
 ## Install
 
@@ -17,7 +18,7 @@ Download the latest APK from [Releases](https://github.com/Chrispsz/tv-minimal/r
 ## Usage
 
 1. Open the app
-2. Enter a streaming URL (M3U8, HLS)
+2. Enter a streaming URL
 3. Or share a URL from another app
 
 ### Supported Formats
@@ -31,7 +32,7 @@ Download the latest APK from [Releases](https://github.com/Chrispsz/tv-minimal/r
 ```bash
 git clone https://github.com/Chrispsz/tv-minimal.git
 cd tv-minimal
-./gradlew assembleDebug
+./gradlew assembleRelease
 ```
 
 ## Technical
@@ -41,7 +42,7 @@ cd tv-minimal
 | Min SDK | 21 (Android 5.0) |
 | Target SDK | 34 (Android 14) |
 | APK Size | ~1.4 MB |
-| Dependencies | 3 (Media3 only) |
+| Dependencies | Media3 ExoPlayer |
 
 ## License
 
