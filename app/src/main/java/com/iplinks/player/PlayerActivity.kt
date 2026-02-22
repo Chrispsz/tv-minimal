@@ -166,17 +166,17 @@ class PlayerActivity : Activity() {
         mainHandler.post { player?.apply { seekToDefaultPosition(); playWhenReady = true } }
     }
 
-    private fun handleDecodeError(error: Throwable) {
+    private fun handleDecodeError(_: Throwable) {
         if (++decodeErrorCount >= MAX_DECODE_ERRORS) { decodeErrorCount = 0; restartPlayer(); return }
         mainHandler.postDelayed({ player?.currentPosition?.let { player?.seekTo(it + 200) } }, DECODE_RECOVERY_DELAY_MS)
     }
 
-    private fun handleNetworkError(error: Throwable) {
+    private fun handleNetworkError(_: Throwable) {
         if (++networkErrorCount >= MAX_NETWORK_ERRORS) { networkErrorCount = 0; restartPlayer(); return }
         mainHandler.postDelayed({ if (currentUrl != null) player?.prepare() }, (2000L shl (networkErrorCount - 1)).coerceAtMost(8000))
     }
 
-    private fun handleGenericError(error: PlaybackException) {
+    private fun handleGenericError(_: PlaybackException) {
         if (retryCount < MAX_RETRIES && currentUrl != null) { retryCount++; restartPlayer() }
     }
 
