@@ -379,7 +379,8 @@ class PlayerActivity : Activity() {
         }, delayMs)
     }
 
-    private fun handleGenericError(_: PlaybackException) {
+    @Suppress("UNUSED_PARAMETER")
+    private fun handleGenericError(error: PlaybackException) {
         if (retryCount < MAX_RETRIES && currentUrl != null) {
             retryCount++
             Log.d(TAG, "Generic retry $retryCount/$MAX_RETRIES")
