@@ -21,6 +21,10 @@ STREAM_URL="${2:-http://209.131.122.136/live/j5z6h3pb/mv67p015c/6589.m3u8?token=
 APK_PATH="${3:-app/build/outputs/apk/release/app-armeabi-v7a-release.apk}"
 ADB_PORT="5555"
 
+# Device connection (USB ou Network)
+DEVICE=""
+CONNECTION_TYPE=""
+
 # Contadores
 ERRORS=0
 WARNINGS=0
@@ -83,39 +87,82 @@ check_jq() {
     fi
 }
 
+detect_device() {
+    echo ""
+    echo -e "${BLUE}═══ DETECÇÃO DE DISPOSITIVO ═══${NC}"
+    
+    # Verificar dispositivos USB conectados
+    USB_DEVICES=$(adb devices 2>/dev/null | grep -v "List" | grep -v "daemon" | grep -v "offline" | grep "device" | grep -v ":" | head -1)
+    
+    if [ -n "$USB_DEVICES" ]; then
+        DEVICE_ID=$(echo "$USB_DEVICES" | awk '{print $1}')
+        echo -e "${GREEN}✓ Dispositivo USB detectado: $DEVICE_ID${NC}"
+        DEVICE="-s $DEVICE_ID"
+        CONNECTION_TYPE="USB"
+        ((TESTS_PASSED++))
+        return 0
+    fi
+    
+    # Verificar dispositivos de rede
+    NETWORK_DEVICES=$(adb devices 2>/dev/null | grep -v "List" | grep -v "daemon" | grep "device" | grep ":" | head -1)
+    
+    if [ -n "$NETWORK_DEVICES" ]; then
+        DEVICE_ID=$(echo "$NETWORK_DEVICES" | awk '{print $1}')
+        echo -e "${GREEN}✓ Dispositivo de rede detectado: $DEVICE_ID${NC}"
+        DEVICE="-s $DEVICE_ID"
+        CONNECTION_TYPE="NETWORK"
+        ((TESTS_PASSED++))
+        return 0
+    fi
+    
+    return 1
+}
+
 connect_tv() {
     echo ""
     echo -e "${BLUE}═══ CONEXÃO COM TV ═══${NC}"
     
-    if [ -z "$TV_IP" ]; then
-        echo -e "${YELLOW}IP não fornecido, buscando dispositivos...${NC}"
-        adb devices
-        echo ""
-        echo -e "${YELLOW}Use: $0 <IP_DA_TV>${NC}"
-        exit 1
+    # Primeiro, tentar detectar dispositivo existente (USB ou rede)
+    if detect_device; then
+        echo -e "${CYAN}Conexão: ${CONNECTION_TYPE}${NC}"
+        return 0
     fi
     
-    echo -e "${CYAN}Conectando a ${TV_IP}:${ADB_PORT}...${NC}"
-    
-    # Desconectar anterior
-    adb disconnect "$TV_IP:$ADB_PORT" 2>/dev/null || true
-    
-    # Conectar
-    if adb connect "$TV_IP:$ADB_PORT" 2>&1 | grep -q "connected\|already connected"; then
-        echo -e "${GREEN}✓ Conectado com sucesso!${NC}"
-        ((TESTS_PASSED++))
-    else
-        echo -e "${RED}❌ Falha ao conectar!${NC}"
-        echo ""
-        echo "Verifique:"
-        echo "  1. TV e PC na mesma rede"
-        echo "  2. ADB debugging ATIVO na TV"
-        echo "  3. IP correto: $TV_IP"
-        ((TESTS_FAILED++))
-        exit 1
+    # Se IP fornecido, tentar conectar via rede
+    if [ -n "$TV_IP" ]; then
+        echo -e "${CYAN}Conectando via rede a ${TV_IP}:${ADB_PORT}...${NC}"
+        
+        # Desconectar anterior
+        adb disconnect "$TV_IP:$ADB_PORT" 2>/dev/null || true
+        
+        # Conectar
+        if adb connect "$TV_IP:$ADB_PORT" 2>&1 | grep -q "connected\|already connected"; then
+            echo -e "${GREEN}✓ Conectado via rede!${NC}"
+            DEVICE="-s $TV_IP:$ADB_PORT"
+            CONNECTION_TYPE="NETWORK"
+            ((TESTS_PASSED++))
+            return 0
+        else
+            echo -e "${RED}❌ Falha ao conectar via rede!${NC}"
+            echo ""
+            echo "Verifique:"
+            echo "  1. TV e PC na mesma rede"
+            echo "  2. ADB debugging ATIVO na TV"
+            echo "  3. IP correto: $TV_IP"
+            ((TESTS_FAILED++))
+            return 1
+        fi
     fi
     
-    DEVICE="-s $TV_IP:$ADB_PORT"
+    # Nenhum dispositivo encontrado
+    echo -e "${YELLOW}Nenhum dispositivo detectado!${NC}"
+    echo ""
+    echo "Opções:"
+    echo "  1. Conecte via USB e ative 'Depuração USB'"
+    echo "  2. Use: $0 <IP_DA_TV> para conexão via rede"
+    echo ""
+    adb devices
+    return 1
 }
 
 check_tv_info() {
@@ -385,18 +432,22 @@ show_menu() {
     echo ""
     echo -e "${CYAN}═════════════════════════════════════════${NC}"
     echo -e "${CYAN}  MENU DE TESTES${NC}"
+    if [ -n "$CONNECTION_TYPE" ]; then
+        echo -e "${CYAN}  Conexão: ${GREEN}$CONNECTION_TYPE${NC}"
+    fi
     echo -e "${CYAN}═════════════════════════════════════════${NC}"
     echo ""
-    echo "  1) Info do dispositivo"
-    echo "  2) Verificar app instalado"
-    echo "  3) Instalar APK"
-    echo "  4) Testar stream URL"
-    echo "  5) Iniciar stream"
-    echo "  6) Monitorar logs (60s)"
-    echo "  7) Testar intents"
-    echo "  8) Stress test"
-    echo "  9) Limpar dados do app"
-    echo "  10) Teste completo (tudo)"
+    echo "  1) Detectar dispositivo (USB/Rede)"
+    echo "  2) Info do dispositivo"
+    echo "  3) Verificar app instalado"
+    echo "  4) Instalar APK"
+    echo "  5) Testar stream URL"
+    echo "  6) Iniciar stream"
+    echo "  7) Monitorar logs (60s)"
+    echo "  8) Testar intents"
+    echo "  9) Stress test"
+    echo "  10) Limpar dados do app"
+    echo "  11) Teste completo (tudo)"
     echo ""
     echo "  0) Sair"
     echo ""
@@ -404,16 +455,18 @@ show_menu() {
     read -r OPTION
     
     case $OPTION in
-        1) check_tv_info ;;
-        2) check_app_installed ;;
-        3) install_apk ;;
-        4) check_stream_url ;;
-        5) start_stream ;;
-        6) monitor_logs ;;
-        7) test_intents ;;
-        8) run_stress_test ;;
-        9) clear_app_data ;;
-        10) 
+        1) detect_device || connect_tv ;;
+        2) check_tv_info ;;
+        3) check_app_installed ;;
+        4) install_apk ;;
+        5) check_stream_url ;;
+        6) start_stream ;;
+        7) monitor_logs ;;
+        8) test_intents ;;
+        9) run_stress_test ;;
+        10) clear_app_data ;;
+        11) 
+            connect_tv || exit 1
             check_tv_info
             check_app_installed || install_apk
             check_stream_url
