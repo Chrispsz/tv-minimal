@@ -20,74 +20,96 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.VideoSize
+import androidx.media3.common.PlaybackParameters
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException
+import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.source.BehindLiveWindowException
+import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
+import androidx.media3.exoplayer.video.VideoRendererEventListener
+import java.util.concurrent.TimeUnit
 
 class PlayerActivity : Activity() {
 
+    // ============================================================
+    // PLAYER STATE
+    // ============================================================
     private var player: ExoPlayer? = null
     private var surfaceView: SurfaceView? = null
     private var retryCount = 0
     private var currentUrl: String? = null
+    
+    // Error counters (reset on successful playback)
     private var audioDiscontinuityCount = 0
     private var decodeErrorCount = 0
     private var networkErrorCount = 0
+    
+    // Stall detection
+    private var lastPlaybackPosition: Long = 0
+    private var stallDetectionCount = 0
+    private var isPlaying = false
+    
+    // Session stats
+    private var sessionStartTime: Long = 0
+    private var totalPlaybackTime: Long = 0
+    private var totalErrors: Int = 0
+    private var totalRecoveries: Int = 0
+    
     private val mainHandler = Handler(Looper.getMainLooper())
     
     // Memory monitoring
     private var memoryCheckRunnable: Runnable? = null
-    private var sessionStartTime: Long = 0
-    private var lastMemoryCheck: Long = 0
+    private var stallCheckRunnable: Runnable? = null
+    private var counterResetRunnable: Runnable? = null
 
+    // ============================================================
+    // CONFIGURATION - Sport Mode Pro
+    // ============================================================
     companion object {
-        // ============================================================
-        // BUFFER CONFIGURATION - Sport Mode (otimizado para live)
-        // ============================================================
-        private const val MIN_BUFFER_MS = 10000           // 10s - balanceia delay x estabilidade
-        private const val MAX_BUFFER_MS = 30000           // 30s - teto seguro para live
-        private const val BUFFER_FOR_PLAYBACK_MS = 1500   // 1.5s - início rápido
-        private const val BUFFER_AFTER_REBUFFER_MS = 3000 // 3s - recuperação rápida
+        // Buffer - otimizado para live
+        private const val MIN_BUFFER_MS = 10000
+        private const val MAX_BUFFER_MS = 30000
+        private const val BUFFER_FOR_PLAYBACK_MS = 1500
+        private const val BUFFER_AFTER_REBUFFER_MS = 3000
         
-        // ============================================================
-        // ERROR RECOVERY LIMITS
-        // ============================================================
+        // Error limits
         private const val MAX_RETRIES = 3
         private const val MAX_AUDIO_DISCONTINUITY = 5
-        
-        // Video Decode
         private const val MAX_DECODE_ERRORS = 5
-        private const val DECODE_RECOVERY_DELAY_MS = 300L // Mais rápido (era 500ms)
-        
-        // Network
         private const val MAX_NETWORK_ERRORS = 3
+        private const val MAX_STALL_DETECTIONS = 3
         
-        // ============================================================
-        // NETWORK TIMEOUT - Sport Mode (recuperação agressiva)
-        // ============================================================
-        private const val CONNECT_TIMEOUT_MS = 8000       // 8s - falha rápido, tenta de novo
-        private const val READ_TIMEOUT_MS = 15000         // 15s - equilíbrio (não tão agressivo)
+        // Recovery delays
+        private const val DECODE_RECOVERY_DELAY_MS = 300L
+        private const val STALL_CHECK_INTERVAL_MS = 2000L
+        private const val COUNTER_RESET_DELAY_MS = 30000L  // 30s sem erro = reset
         
-        // ============================================================
-        // MEMORY MONITORING - Sport Mode (mais proativo)
-        // ============================================================
-        private const val MEMORY_CHECK_INTERVAL_MS = 30000L   // 30s - detecção rápida
-        private const val MEMORY_WARNING_RATIO = 0.85         // 85% da heap
-        private const val SESSION_RESTART_INTERVAL_MS = 9000000L // 2.5h (150min) - cobre jogo completo
+        // Network timeouts
+        private const val CONNECT_TIMEOUT_MS = 8000
+        private const val READ_TIMEOUT_MS = 15000
+        
+        // Memory
+        private const val MEMORY_CHECK_INTERVAL_MS = 30000L
+        private const val MEMORY_WARNING_RATIO = 0.85
+        private const val SESSION_RESTART_INTERVAL_MS = 9000000L  // 2.5h
         
         private const val TAG = "PlayerActivity"
     }
 
+    // ============================================================
+    // LIFECYCLE
+    // ============================================================
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
         val url = getUrlFromIntent(intent)
         if (url == null) {
+            Log.e(TAG, "No URL provided, finishing")
             finish()
             return
         }
@@ -113,24 +135,28 @@ class PlayerActivity : Activity() {
         setContentView(rootLayout)
 
         initPlayer()
-        startMemoryMonitoring()
+        startMonitoring()
         play(url)
+        
+        Log.i(TAG, "Session started - URL: ${url.take(50)}...")
     }
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         val url = getUrlFromIntent(intent) ?: return
         
-        // Reset all counters for new stream
+        // Log previous session stats
+        logSessionStats()
+        
+        // Full reset for new stream
         currentUrl = url
-        retryCount = 0
-        audioDiscontinuityCount = 0
-        decodeErrorCount = 0
-        networkErrorCount = 0
+        resetAllCounters()
         sessionStartTime = System.currentTimeMillis()
         
         player?.stop()
         play(url)
+        
+        Log.i(TAG, "New stream started - URL: ${url.take(50)}...")
     }
 
     private fun getUrlFromIntent(intent: Intent): String? {
@@ -153,6 +179,9 @@ class PlayerActivity : Activity() {
             ?: intent.getStringExtra("video_url")
     }
 
+    // ============================================================
+    // PLAYER INITIALIZATION
+    // ============================================================
     private fun initPlayer() {
         val loadControl = DefaultLoadControl.Builder()
             .setBufferDurationsMs(
@@ -164,17 +193,13 @@ class PlayerActivity : Activity() {
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
-        // ========== MELHORIA 2: Network Timeout ==========
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setConnectTimeoutMs(CONNECT_TIMEOUT_MS)
             .setReadTimeoutMs(READ_TIMEOUT_MS)
             .setAllowCrossProtocolRedirects(true)
-            .setUserAgent("tv-minimal/1.0")
+            .setUserAgent("tv-minimal/2.0")
 
-        val dataSourceFactory = DefaultDataSource.Factory(
-            this,
-            httpDataSourceFactory
-        )
+        val dataSourceFactory = DefaultDataSource.Factory(this, httpDataSourceFactory)
 
         val audioAttributes = AudioAttributes.Builder()
             .setUsage(C.USAGE_MEDIA)
@@ -199,38 +224,62 @@ class PlayerActivity : Activity() {
                     }
                     
                     override fun onVideoSizeChanged(videoSize: VideoSize) {
-                        Log.d(TAG, "Video size: ${videoSize.width}x${videoSize.height}")
+                        Log.d(TAG, "Video: ${videoSize.width}x${videoSize.height} @ ${videoSize.pixelWidthHeightRatio}x")
+                    }
+                    
+                    override fun onIsPlayingChanged(playing: Boolean) {
+                        isPlaying = playing
+                        if (playing) {
+                            // Reset stall detection when playing
+                            stallDetectionCount = 0
+                            scheduleCounterReset()
+                        }
+                    }
+                    
+                    override fun onPlaybackStateChanged(state: Int) {
+                        when (state) {
+                            ExoPlayer.STATE_READY -> {
+                                Log.i(TAG, "Playback ready - ${getPlaybackStats()}")
+                            }
+                            ExoPlayer.STATE_BUFFERING -> {
+                                Log.d(TAG, "Buffering...")
+                            }
+                            ExoPlayer.STATE_ENDED -> {
+                                Log.i(TAG, "Playback ended")
+                            }
+                        }
                     }
                 })
             }
     }
 
-    // ========== HANDLER CENTRALIZADO DE ERROS ==========
+    // ============================================================
+    // ERROR HANDLER - Centralizado
+    // ============================================================
     private fun handleError(error: PlaybackException) {
-        Log.e(TAG, "Player error: ${error.message}", error)
+        totalErrors++
+        Log.e(TAG, "Player error #${totalErrors}: ${error.message}")
+        
+        // Cancel pending counter reset
+        cancelCounterReset()
         
         when (val cause = error.cause) {
-            // Audio timestamp discontinuity
             is AudioSink.UnexpectedDiscontinuityException -> {
                 handleAudioDiscontinuity()
             }
             
-            // Behind live window (HLS live streams)
             is BehindLiveWindowException -> {
                 handleBehindLiveWindow()
             }
             
-            // ========== MELHORIA 1: Video Decode Errors ==========
             is MediaCodecDecoderException -> {
                 handleDecodeError(cause)
             }
             
-            // Generic decoder errors
             is androidx.media3.exoplayer.mediacodec.MediaCodecUtil.DecoderQueryException -> {
                 handleDecodeError(error)
             }
             
-            // ========== MELHORIA 2: Network Errors ==========
             is java.net.SocketTimeoutException,
             is java.net.UnknownHostException,
             is java.net.ConnectException,
@@ -238,7 +287,6 @@ class PlayerActivity : Activity() {
                 handleNetworkError(cause)
             }
             
-            // Check for network-related error codes
             else -> {
                 when (error.errorCode) {
                     PlaybackException.ERROR_CODE_IO_NETWORK_CONNECTION_FAILED,
@@ -248,23 +296,23 @@ class PlayerActivity : Activity() {
                     PlaybackException.ERROR_CODE_PARSING_CONTAINER_MALFORMED -> {
                         handleNetworkError(error)
                     }
-                    else -> {
-                        // Unknown error - try retry
-                        handleGenericError(error)
-                    }
+                    else -> handleGenericError(error)
                 }
             }
         }
     }
-    
-    // ========== AUDIO DISCONTINUITY ==========
+
+    // ============================================================
+    // ERROR HANDLERS
+    // ============================================================
     private fun handleAudioDiscontinuity() {
         audioDiscontinuityCount++
-        Log.w(TAG, "Audio discontinuity #$audioDiscontinuityCount")
+        Log.w(TAG, "Audio discontinuity #$audioDiscontinuityCount/$MAX_AUDIO_DISCONTINUITY")
         
         if (audioDiscontinuityCount >= MAX_AUDIO_DISCONTINUITY) {
-            Log.w(TAG, "Forcing audio resync due to repeated discontinuities")
+            Log.w(TAG, "→ Forcing audio resync")
             audioDiscontinuityCount = 0
+            totalRecoveries++
             
             mainHandler.post {
                 player?.currentPosition?.let { pos ->
@@ -273,10 +321,11 @@ class PlayerActivity : Activity() {
             }
         }
     }
-    
-    // ========== BEHIND LIVE WINDOW ==========
+
     private fun handleBehindLiveWindow() {
-        Log.w(TAG, "BehindLiveWindowException - returning to live edge")
+        Log.w(TAG, "→ Behind live window, returning to live edge")
+        totalRecoveries++
+        
         mainHandler.post {
             player?.apply {
                 seekToDefaultPosition()
@@ -284,43 +333,42 @@ class PlayerActivity : Activity() {
             }
         }
     }
-    
-    // ========== MELHORIA 1: VIDEO DECODE ERRORS ==========
+
     private fun handleDecodeError(error: Throwable) {
         decodeErrorCount++
-        Log.e(TAG, "Decode error #$decodeErrorCount: ${error.message}")
+        Log.e(TAG, "Decode error #$decodeErrorCount/$MAX_DECODE_ERRORS: ${error.message}")
         
         if (decodeErrorCount >= MAX_DECODE_ERRORS) {
-            Log.e(TAG, "Max decode errors reached - forcing player restart")
+            Log.e(TAG, "→ Max decode errors, restarting player")
             decodeErrorCount = 0
+            totalRecoveries++
             restartPlayer()
             return
         }
         
-        // Try soft recovery: skip current frame
         mainHandler.postDelayed({
             player?.currentPosition?.let { pos ->
-                Log.d(TAG, "Decode recovery: seeking forward 200ms")
+                Log.d(TAG, "→ Decode recovery: seek +200ms")
                 player?.seekTo(pos + 200)
             }
         }, DECODE_RECOVERY_DELAY_MS)
     }
-    
-    // ========== MELHORIA 2: NETWORK ERRORS ==========
+
     private fun handleNetworkError(error: Throwable) {
         networkErrorCount++
-        Log.w(TAG, "Network error #$networkErrorCount: ${error.javaClass.simpleName} - ${error.message}")
+        Log.w(TAG, "Network error #$networkErrorCount/$MAX_NETWORK_ERRORS: ${error.javaClass.simpleName}")
         
         if (networkErrorCount >= MAX_NETWORK_ERRORS) {
-            Log.e(TAG, "Max network errors reached - forcing player restart")
+            Log.e(TAG, "→ Max network errors, restarting player")
             networkErrorCount = 0
+            totalRecoveries++
             restartPlayer()
             return
         }
         
-        // Exponential backoff retry
-        val delayMs = (2000L * (1 shl (networkErrorCount - 1))).coerceAtMost(10000)
-        Log.d(TAG, "Network retry in ${delayMs}ms")
+        // Exponential backoff: 2s, 4s, 8s
+        val delayMs = (2000L * (1 shl (networkErrorCount - 1))).coerceAtMost(8000)
+        Log.d(TAG, "→ Network retry in ${delayMs}ms")
         
         mainHandler.postDelayed({
             if (currentUrl != null) {
@@ -328,31 +376,99 @@ class PlayerActivity : Activity() {
             }
         }, delayMs)
     }
-    
-    // ========== GENERIC ERROR ==========
+
     private fun handleGenericError(error: PlaybackException) {
         if (retryCount < MAX_RETRIES && currentUrl != null) {
             retryCount++
-            Log.d(TAG, "Generic retry ($retryCount/$MAX_RETRIES)")
+            Log.d(TAG, "Generic retry $retryCount/$MAX_RETRIES")
+            totalRecoveries++
             restartPlayer()
         } else {
-            Log.e(TAG, "Max retries reached - cannot recover")
+            Log.e(TAG, "→ Max retries reached, cannot recover")
         }
     }
+
+    // ============================================================
+    // STALL DETECTION - Novo!
+    // ============================================================
+    private fun startStallDetection() {
+        stallCheckRunnable = object : Runnable {
+            override fun run() {
+                if (!isPlaying) {
+                    mainHandler.postDelayed(this, STALL_CHECK_INTERVAL_MS)
+                    return
+                }
+                
+                val currentPos = player?.currentPosition ?: 0
+                
+                if (lastPlaybackPosition == currentPos && currentPos > 0) {
+                    stallDetectionCount++
+                    Log.w(TAG, "Stall detected #$stallDetectionCount/$MAX_STALL_DETECTIONS (pos=$currentPos)")
+                    
+                    if (stallDetectionCount >= MAX_STALL_DETECTIONS) {
+                        Log.w(TAG, "→ Forcing recovery from stall")
+                        stallDetectionCount = 0
+                        totalRecoveries++
+                        
+                        // Try to recover
+                        player?.apply {
+                            pause()
+                            seekTo(currentPos + 500)
+                            play()
+                        }
+                    }
+                } else {
+                    // Position changed, reset stall count
+                    if (stallDetectionCount > 0) {
+                        Log.d(TAG, "Stall recovered naturally")
+                    }
+                    stallDetectionCount = 0
+                }
+                
+                lastPlaybackPosition = currentPos
+                mainHandler.postDelayed(this, STALL_CHECK_INTERVAL_MS)
+            }
+        }
+        
+        mainHandler.postDelayed(stallCheckRunnable!!, STALL_CHECK_INTERVAL_MS)
+    }
+
+    // ============================================================
+    // COUNTER RESET - Novo!
+    // ============================================================
+    private fun scheduleCounterReset() {
+        cancelCounterReset()
+        
+        counterResetRunnable = Runnable {
+            if (isPlaying && audioDiscontinuityCount > 0 || decodeErrorCount > 0 || networkErrorCount > 0) {
+                Log.d(TAG, "Resetting error counters (stable playback)")
+                audioDiscontinuityCount = 0
+                decodeErrorCount = 0
+                networkErrorCount = 0
+            }
+        }
+        
+        mainHandler.postDelayed(counterResetRunnable!!, COUNTER_RESET_DELAY_MS)
+    }
     
-    // ========== PLAYER RESTART ==========
+    private fun cancelCounterReset() {
+        counterResetRunnable?.let { mainHandler.removeCallbacks(it) }
+    }
+
+    // ============================================================
+    // PLAYER RESTART
+    // ============================================================
     private fun restartPlayer() {
         mainHandler.post {
             try {
                 player?.stop()
                 currentUrl?.let { url ->
-                    // Small delay before restart
                     mainHandler.postDelayed({
                         play(url)
                     }, 500)
                 }
             } catch (e: Exception) {
-                Log.e(TAG, "Error during player restart", e)
+                Log.e(TAG, "Error during restart: ${e.message}")
             }
         }
     }
@@ -364,16 +480,23 @@ class PlayerActivity : Activity() {
         }
     }
 
-    // ========== MELHORIA 3: MEMORY MONITORING ==========
+    // ============================================================
+    // MEMORY MONITORING
+    // ============================================================
+    private fun startMonitoring() {
+        startMemoryMonitoring()
+        startStallDetection()
+    }
+    
     private fun startMemoryMonitoring() {
         memoryCheckRunnable = object : Runnable {
             override fun run() {
                 checkMemory()
                 
-                // Check session duration for preventive restart
                 val sessionDuration = System.currentTimeMillis() - sessionStartTime
                 if (sessionDuration > SESSION_RESTART_INTERVAL_MS) {
-                    Log.i(TAG, "Session restart triggered (4h elapsed) - preventing memory buildup")
+                    Log.i(TAG, "Session restart (${sessionDuration / 60000}min elapsed)")
+                    totalRecoveries++
                     restartPlayer()
                     sessionStartTime = System.currentTimeMillis()
                 }
@@ -384,7 +507,7 @@ class PlayerActivity : Activity() {
         
         mainHandler.postDelayed(memoryCheckRunnable!!, MEMORY_CHECK_INTERVAL_MS)
     }
-    
+
     private fun checkMemory() {
         val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
         val memoryInfo = ActivityManager.MemoryInfo()
@@ -395,35 +518,62 @@ class PlayerActivity : Activity() {
         val maxMemory = runtime.maxMemory()
         val memoryUsageRatio = usedMemory.toDouble() / maxMemory.toDouble()
         
-        val availableMB = memoryInfo.availMem / (1024 * 1024)
         val usedMB = usedMemory / (1024 * 1024)
         val maxMB = maxMemory / (1024 * 1024)
+        val availMB = memoryInfo.availMem / (1024 * 1024)
         
-        Log.d(TAG, "Memory: ${usedMB}MB / ${maxMB}MB (${(memoryUsageRatio * 100).toInt()}%) | System available: ${availableMB}MB")
+        // Only log if significant
+        if (memoryUsageRatio > 0.7) {
+            Log.d(TAG, "Memory: ${usedMB}MB/${maxMB}MB (${(memoryUsageRatio * 100).toInt()}%) | System: ${availMB}MB")
+        }
         
-        // ========== MELHORIA 3: Memory Warning ==========
         if (memoryUsageRatio > MEMORY_WARNING_RATIO) {
-            Log.w(TAG, "High memory usage detected (${(memoryUsageRatio * 100).toInt()}%) - forcing GC and player restart")
-            
-            // Request GC
+            Log.w(TAG, "High memory (${(memoryUsageRatio * 100).toInt()}%) → GC + restart")
             System.gc()
-            
-            // Restart player to clear buffers
+            totalRecoveries++
             restartPlayer()
-            
-            // Reset session timer
             sessionStartTime = System.currentTimeMillis()
         }
         
-        // Check if system is low on memory
         if (memoryInfo.lowMemory) {
-            Log.w(TAG, "System low memory warning - clearing resources")
+            Log.w(TAG, "System low memory warning")
             System.gc()
         }
-        
-        lastMemoryCheck = System.currentTimeMillis()
     }
 
+    // ============================================================
+    // SESSION STATS
+    // ============================================================
+    private fun getPlaybackStats(): String {
+        val duration = System.currentTimeMillis() - sessionStartTime
+        val minutes = TimeUnit.MILLISECONDS.toMinutes(duration)
+        return "uptime=${minutes}m errors=$totalErrors recoveries=$totalRecoveries"
+    }
+    
+    private fun logSessionStats() {
+        val duration = System.currentTimeMillis() - sessionStartTime
+        val minutes = TimeUnit.MILLISECONDS.toMinutes(duration)
+        
+        Log.i(TAG, "═══ SESSION STATS ═══")
+        Log.i(TAG, "  Duration: ${minutes} minutes")
+        Log.i(TAG, "  Errors: $totalErrors")
+        Log.i(TAG, "  Recoveries: $totalRecoveries")
+        Log.i(TAG, "═════════════════════")
+    }
+    
+    private fun resetAllCounters() {
+        retryCount = 0
+        audioDiscontinuityCount = 0
+        decodeErrorCount = 0
+        networkErrorCount = 0
+        stallDetectionCount = 0
+        totalErrors = 0
+        totalRecoveries = 0
+    }
+
+    // ============================================================
+    // LIFECYCLE CALLBACKS
+    // ============================================================
     override fun onResume() {
         super.onResume()
         player?.play()
@@ -442,14 +592,16 @@ class PlayerActivity : Activity() {
     override fun onDestroy() {
         super.onDestroy()
         
-        // Clean up memory monitoring
-        memoryCheckRunnable?.let {
-            mainHandler.removeCallbacks(it)
-        }
+        // Log final stats
+        logSessionStats()
         
+        // Cancel all runnables
+        memoryCheckRunnable?.let { mainHandler.removeCallbacks(it) }
+        stallCheckRunnable?.let { mainHandler.removeCallbacks(it) }
+        counterResetRunnable?.let { mainHandler.removeCallbacks(it) }
         mainHandler.removeCallbacksAndMessages(null)
         
-        // Release player resources
+        // Release player
         player?.apply {
             stop()
             release()
@@ -459,10 +611,9 @@ class PlayerActivity : Activity() {
         surfaceView = null
         currentUrl = null
         
-        // Request GC on destroy
         System.gc()
         
-        Log.i(TAG, "PlayerActivity destroyed - all resources cleaned")
+        Log.i(TAG, "PlayerActivity destroyed")
     }
 
     private fun hideSystemUI() {
