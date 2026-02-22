@@ -379,7 +379,7 @@ class PlayerActivity : Activity() {
         }, delayMs)
     }
 
-    private fun handleGenericError(error: PlaybackException) {
+    private fun handleGenericError(_: PlaybackException) {
         if (retryCount < MAX_RETRIES && currentUrl != null) {
             retryCount++
             Log.d(TAG, "Generic retry $retryCount/$MAX_RETRIES")
