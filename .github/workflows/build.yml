@@ -16,7 +16,10 @@ jobs:
   build:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout branch
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ inputs.build_type }}
     
     - uses: actions/setup-java@v4
       with:
