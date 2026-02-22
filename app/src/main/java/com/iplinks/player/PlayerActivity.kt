@@ -46,27 +46,39 @@ class PlayerActivity : Activity() {
     private var lastMemoryCheck: Long = 0
 
     companion object {
-        private const val MIN_BUFFER_MS = 15000
-        private const val MAX_BUFFER_MS = 50000
-        private const val BUFFER_FOR_PLAYBACK_MS = 2500
-        private const val BUFFER_AFTER_REBUFFER_MS = 5000
+        // ============================================================
+        // BUFFER CONFIGURATION - Sport Mode (otimizado para live)
+        // ============================================================
+        private const val MIN_BUFFER_MS = 10000           // 10s - balanceia delay x estabilidade
+        private const val MAX_BUFFER_MS = 30000           // 30s - teto seguro para live
+        private const val BUFFER_FOR_PLAYBACK_MS = 1500   // 1.5s - início rápido
+        private const val BUFFER_AFTER_REBUFFER_MS = 3000 // 3s - recuperação rápida
         
+        // ============================================================
+        // ERROR RECOVERY LIMITS
+        // ============================================================
         private const val MAX_RETRIES = 3
         private const val MAX_AUDIO_DISCONTINUITY = 5
         
-        // ========== MELHORIA 1: Video Decode ==========
+        // Video Decode
         private const val MAX_DECODE_ERRORS = 5
-        private const val DECODE_RECOVERY_DELAY_MS = 500L
+        private const val DECODE_RECOVERY_DELAY_MS = 300L // Mais rápido (era 500ms)
         
-        // ========== MELHORIA 2: Network Timeout ==========
-        private const val CONNECT_TIMEOUT_MS = 15000      // 15s para conectar
-        private const val READ_TIMEOUT_MS = 20000         // 20s para ler dados
+        // Network
         private const val MAX_NETWORK_ERRORS = 3
         
-        // ========== MELHORIA 3: Memory ==========
-        private const val MEMORY_CHECK_INTERVAL_MS = 60000L  // Checa a cada 1 min
-        private const val MEMORY_WARNING_RATIO = 0.85        // 85% da heap usada
-        private const val SESSION_RESTART_INTERVAL_MS = 14400000L // 4 horas - restart preventivo
+        // ============================================================
+        // NETWORK TIMEOUT - Sport Mode (recuperação agressiva)
+        // ============================================================
+        private const val CONNECT_TIMEOUT_MS = 8000       // 8s - falha rápido, tenta de novo
+        private const val READ_TIMEOUT_MS = 15000         // 15s - equilíbrio (não tão agressivo)
+        
+        // ============================================================
+        // MEMORY MONITORING - Sport Mode (mais proativo)
+        // ============================================================
+        private const val MEMORY_CHECK_INTERVAL_MS = 30000L   // 30s - detecção rápida
+        private const val MEMORY_WARNING_RATIO = 0.85         // 85% da heap
+        private const val SESSION_RESTART_INTERVAL_MS = 9000000L // 2.5h (150min) - cobre jogo completo
         
         private const val TAG = "PlayerActivity"
     }
