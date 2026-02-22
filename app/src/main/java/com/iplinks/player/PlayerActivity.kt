@@ -20,18 +20,14 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
 import androidx.media3.common.VideoSize
-import androidx.media3.common.PlaybackParameters
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
 import androidx.media3.exoplayer.mediacodec.MediaCodecDecoderException
-import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.trackselection.DefaultTrackSelector
 import androidx.media3.exoplayer.source.BehindLiveWindowException
-import androidx.media3.exoplayer.video.MediaCodecVideoRenderer
-import androidx.media3.exoplayer.video.VideoRendererEventListener
 import java.util.concurrent.TimeUnit
 
 class PlayerActivity : Activity() {
@@ -56,7 +52,6 @@ class PlayerActivity : Activity() {
     
     // Session stats
     private var sessionStartTime: Long = 0
-    private var totalPlaybackTime: Long = 0
     private var totalErrors: Int = 0
     private var totalRecoveries: Int = 0
     
@@ -440,7 +435,7 @@ class PlayerActivity : Activity() {
         cancelCounterReset()
         
         counterResetRunnable = Runnable {
-            if (isPlaying && audioDiscontinuityCount > 0 || decodeErrorCount > 0 || networkErrorCount > 0) {
+            if (isPlaying && (audioDiscontinuityCount > 0 || decodeErrorCount > 0 || networkErrorCount > 0)) {
                 Log.d(TAG, "Resetting error counters (stable playback)")
                 audioDiscontinuityCount = 0
                 decodeErrorCount = 0
