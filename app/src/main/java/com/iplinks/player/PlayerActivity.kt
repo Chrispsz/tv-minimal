@@ -4,6 +4,8 @@ import android.app.Activity
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.SurfaceView
 import android.view.WindowManager
 import android.widget.FrameLayout
@@ -13,6 +15,8 @@ import androidx.core.view.WindowInsetsControllerCompat
 import android.util.Log
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
+import androidx.media3.common.AudioAttributes
+import androidx.media3.common.C
 import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.audio.AudioSink
@@ -24,13 +28,16 @@ class PlayerActivity : Activity() {
     private var surfaceView: SurfaceView? = null
     private var retryCount = 0
     private var currentUrl: String? = null
+    private var audioDiscontinuityCount = 0
+    private val mainHandler = Handler(Looper.getMainLooper())
 
     companion object {
-        private const val MIN_BUFFER_MS = 15000      // 15s - prevents stuttering
-        private const val MAX_BUFFER_MS = 50000      // 50s - handles network hiccups
+        private const val MIN_BUFFER_MS = 15000
+        private const val MAX_BUFFER_MS = 50000
         private const val BUFFER_FOR_PLAYBACK_MS = 2500
         private const val BUFFER_AFTER_REBUFFER_MS = 5000
         private const val MAX_RETRIES = 3
+        private const val MAX_AUDIO_DISCONTINUITY = 5  // Limite antes de resync
         private const val TAG = "PlayerActivity"
     }
 
@@ -45,7 +52,6 @@ class PlayerActivity : Activity() {
 
         currentUrl = url
 
-        // Essential for TV/player apps
         WindowCompat.setDecorFitsSystemWindows(window, false)
         window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
         hideSystemUI()
@@ -71,30 +77,27 @@ class PlayerActivity : Activity() {
         super.onNewIntent(intent)
         val url = getUrlFromIntent(intent) ?: return
         currentUrl = url
-        retryCount = 0  // Reset retry counter for new URL
+        retryCount = 0
+        audioDiscontinuityCount = 0
         player?.stop()
         play(url)
     }
 
     private fun getUrlFromIntent(intent: Intent): String? {
-        // 1. URI data como URL direta (http/rtmp)
         intent.data?.toString()?.takeIf {
             it.startsWith("http") || it.startsWith("rtmp")
         }?.let { return it }
         
-        // 2. Query parameter do scheme customizado iplinks://play?stream_url=...
         intent.data?.getQueryParameter("stream_url")?.takeIf {
             it.startsWith("http") || it.startsWith("rtmp")
         }?.let { return it }
 
-        // 3. ACTION_SEND com texto
         if (intent.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.trim()?.takeIf {
                 it.startsWith("http") || it.startsWith("rtmp")
             }?.let { return it }
         }
 
-        // 4. Extras diretos
         return intent.getStringExtra("stream_url")
             ?: intent.getStringExtra("url")
             ?: intent.getStringExtra("video_url")
@@ -111,6 +114,12 @@ class PlayerActivity : Activity() {
             .setPrioritizeTimeOverSizeThresholds(true)
             .build()
 
+        // Audio attributes para conteúdo de mídia (ajuda na sincronização)
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MOVIE)
+            .build()
+
         player = ExoPlayer.Builder(this)
             .setLoadControl(loadControl)
             .setTrackSelector(DefaultTrackSelector(this))
@@ -118,14 +127,29 @@ class PlayerActivity : Activity() {
             .apply {
                 setVideoSurfaceView(surfaceView)
                 playWhenReady = true
+                setAudioAttributes(audioAttributes, true)
 
                 addListener(object : androidx.media3.common.Player.Listener {
                     override fun onPlayerError(error: PlaybackException) {
                         Log.e(TAG, "Player error: ${error.message}", error)
                         
-                        // Audio timestamp discontinuity - NÃO é erro fatal, player recupera sozinho
+                        // Audio timestamp discontinuity - problema comum em HLS mal codificado
                         if (error.cause is AudioSink.UnexpectedDiscontinuityException) {
-                            Log.w(TAG, "Audio discontinuity detected - auto-recovered")
+                            audioDiscontinuityCount++
+                            Log.w(TAG, "Audio discontinuity #$audioDiscontinuityCount")
+                            
+                            // Após muitas discontinuidades, força resync do áudio
+                            if (audioDiscontinuityCount >= MAX_AUDIO_DISCONTINUITY) {
+                                Log.w(TAG, "Forcing audio resync due to repeated discontinuities")
+                                audioDiscontinuityCount = 0
+                                
+                                // Soft resync: pequeno seek para forçar realinhamento
+                                mainHandler.post {
+                                    player?.currentPosition?.let { pos ->
+                                        player?.seekTo(pos + 100) // Avança 100ms para forçar resync
+                                    }
+                                }
+                            }
                             return
                         }
                         
@@ -165,6 +189,7 @@ class PlayerActivity : Activity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        mainHandler.removeCallbacksAndMessages(null)
         player?.release()
         player = null
         surfaceView = null
