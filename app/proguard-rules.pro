@@ -18,11 +18,13 @@
 # Aggressive optimizations
 -optimizations !code/simplification/arithmetic,!field/*,!class/merging/*,!code/allocation/variable
 
-# Remove debug logs in release (shrinks APK)
+# Remove ALL debug logs in release (shrinks APK significantly)
 -assumenosideeffects class android.util.Log {
     public static *** d(...);
     public static *** v(...);
     public static *** i(...);
+    public static *** w(...);
+    public static *** e(...);
 }
 
 # Keep native methods

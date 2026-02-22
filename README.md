@@ -5,21 +5,32 @@ A lightweight media player for Android TV devices.
 ## Features
 
 - HLS/HTTP streaming support
-- Android TV optimized
+- Android TV optimized (Leanback launcher)
 - Ultra lightweight (~1.4 MB)
-- Auto-retry on connection errors
+- Auto-recovery from streaming errors
 - Fullscreen landscape mode
 - Audio sync correction for live streams
 
 ## Install
 
-Download the latest APK from [Releases](https://github.com/Chrispsz/tv-minimal/releases) or build from source.
+Download the latest APK from [Actions](https://github.com/Chrispsz/tv-minimal/actions) or build from source.
 
 ## Usage
 
-1. Open the app
-2. Enter a streaming URL
-3. Or share a URL from another app
+The app receives streaming URLs via Android intents:
+
+### Methods
+
+1. **Share URL** - Share a video URL from any app to IPLINKS
+2. **Open Link** - Tap a video/streams link in a browser
+3. **Custom Scheme** - Use `iplinks://play?url=STREAM_URL`
+4. **External App** - Send intent with `stream_url` extra
+
+### Example (ADB)
+```bash
+adb shell am start -a android.intent.action.VIEW \
+  -d "iplinks://play?url=https://example.com/stream.m3u8"
+```
 
 ### Supported Formats
 
@@ -34,6 +45,8 @@ git clone https://github.com/Chrispsz/tv-minimal.git
 cd tv-minimal
 ./gradlew assembleRelease
 ```
+
+APK output: `app/build/outputs/apk/release/`
 
 ## Technical
 
