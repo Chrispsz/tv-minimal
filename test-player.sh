@@ -4,8 +4,6 @@
 # IPLINKS Player - Teste Completo
 # ========================================
 
-set -e
-
 # Cores
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -65,7 +63,7 @@ check_adb() {
         exit 1
     fi
     echo -e "${GREEN}✓ ADB encontrado${NC}"
-    ((TESTS_PASSED++))
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 check_curl() {
@@ -74,16 +72,16 @@ check_curl() {
         exit 1
     fi
     echo -e "${GREEN}✓ curl encontrado${NC}"
-    ((TESTS_PASSED++))
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 check_jq() {
     if ! command -v jq &> /dev/null; then
         echo -e "${YELLOW}⚠ jq não encontrado (algumas funções limitadas)${NC}"
-        ((WARNINGS++))
+        WARNINGS=$((WARNINGS + 1))
     else
         echo -e "${GREEN}✓ jq encontrado${NC}"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     fi
 }
 
@@ -99,7 +97,7 @@ detect_device() {
         echo -e "${GREEN}✓ Dispositivo USB detectado: $DEVICE_ID${NC}"
         DEVICE="-s $DEVICE_ID"
         CONNECTION_TYPE="USB"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
     fi
     
@@ -111,7 +109,7 @@ detect_device() {
         echo -e "${GREEN}✓ Dispositivo de rede detectado: $DEVICE_ID${NC}"
         DEVICE="-s $DEVICE_ID"
         CONNECTION_TYPE="NETWORK"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
     fi
     
@@ -140,7 +138,7 @@ connect_tv() {
             echo -e "${GREEN}✓ Conectado via rede!${NC}"
             DEVICE="-s $TV_IP:$ADB_PORT"
             CONNECTION_TYPE="NETWORK"
-            ((TESTS_PASSED++))
+            TESTS_PASSED=$((TESTS_PASSED + 1))
             return 0
         else
             echo -e "${RED}❌ Falha ao conectar via rede!${NC}"
@@ -149,7 +147,7 @@ connect_tv() {
             echo "  1. TV e PC na mesma rede"
             echo "  2. ADB debugging ATIVO na TV"
             echo "  3. IP correto: $TV_IP"
-            ((TESTS_FAILED++))
+            TESTS_FAILED=$((TESTS_FAILED + 1))
             return 1
         fi
     fi
@@ -186,7 +184,7 @@ check_tv_info() {
     MEM_MB=$((MEM / 1024))
     echo -e "  RAM: ${GREEN}${MEM_MB} MB${NC}"
     
-    ((TESTS_PASSED++))
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 check_app_installed() {
@@ -200,11 +198,11 @@ check_app_installed() {
         VERSION=$(adb $DEVICE shell dumpsys package com.iplinks.player 2>/dev/null | grep versionName | head -1 | cut -d= -f2)
         echo -e "  Versão: ${GREEN}$VERSION${NC}"
         
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
     else
         echo -e "${YELLOW}⚠ App não instalado${NC}"
-        ((WARNINGS++))
+        WARNINGS=$((WARNINGS + 1))
         return 1
     fi
 }
@@ -226,7 +224,7 @@ install_apk() {
             echo -e "${YELLOW}Baixe manualmente do GitHub Actions${NC}"
         fi
         
-        ((TESTS_FAILED++))
+        TESTS_FAILED=$((TESTS_FAILED + 1))
         return 1
     fi
     
@@ -234,10 +232,10 @@ install_apk() {
     
     if adb $DEVICE install -r "$APK_PATH" 2>&1 | grep -q "Success"; then
         echo -e "${GREEN}✓ APK instalado com sucesso!${NC}"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         echo -e "${RED}❌ Falha na instalação${NC}"
-        ((TESTS_FAILED++))
+        TESTS_FAILED=$((TESTS_FAILED + 1))
         return 1
     fi
 }
@@ -256,11 +254,11 @@ check_stream_url() {
     
     if echo "$HTTP_CODE" | grep -q "200"; then
         echo -e "${GREEN}✓ Stream acessível${NC}"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
         return 0
     else
         echo -e "${RED}❌ Stream indisponível${NC}"
-        ((TESTS_FAILED++))
+        TESTS_FAILED=$((TESTS_FAILED + 1))
         return 1
     fi
 }
@@ -284,10 +282,10 @@ start_stream() {
     
     if [ $? -eq 0 ]; then
         echo -e "${GREEN}✓ Stream iniciado${NC}"
-        ((TESTS_PASSED++))
+        TESTS_PASSED=$((TESTS_PASSED + 1))
     else
         echo -e "${RED}❌ Falha ao iniciar${NC}"
-        ((TESTS_FAILED++))
+        TESTS_FAILED=$((TESTS_FAILED + 1))
         return 1
     fi
     
@@ -321,13 +319,13 @@ monitor_logs() {
         # Detectar tipos de log
         if echo "$line" | grep -qi "error\|failed\|exception"; then
             echo -e "${RED}[$TS] ❌ $line${NC}"
-            ((ERROR_COUNT++))
+            ERROR_COUNT=$((ERROR_COUNT + 1))
         elif echo "$line" | grep -qi "warning\|stall"; then
             echo -e "${YELLOW}[$TS] ⚠ $line${NC}"
-            ((STALL_COUNT++))
+            STALL_COUNT=$((STALL_COUNT + 1))
         elif echo "$line" | grep -qi "recovery\|resync\|restart"; then
             echo -e "${GREEN}[$TS] 🔄 $line${NC}"
-            ((RECOVERY_COUNT++))
+            RECOVERY_COUNT=$((RECOVERY_COUNT + 1))
         elif echo "$line" | grep -qi "ready\|playing"; then
             echo -e "${GREEN}[$TS] ▶ $line${NC}"
         fi
@@ -371,7 +369,7 @@ test_intents() {
     sleep 1
     adb $DEVICE shell am force-stop com.iplinks.player 2>/dev/null
     
-    ((TESTS_PASSED+=3))
+    TESTS_PASSED=$((TESTS_PASSED + 3))
 }
 
 run_stress_test() {
@@ -393,7 +391,7 @@ run_stress_test() {
     done
     
     echo -e "${GREEN}✓ Stress test completo${NC}"
-    ((TESTS_PASSED++))
+    TESTS_PASSED=$((TESTS_PASSED + 1))
 }
 
 clear_app_data() {
