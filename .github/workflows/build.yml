@@ -19,6 +19,19 @@ jobs:
     
     - uses: android-actions/setup-android@v3
     
+    - name: Create debug keystore
+      run: |
+        mkdir -p ~/.android
+        keytool -genkeypair -v \
+          -keystore ~/.android/debug.keystore \
+          -storepass android \
+          -alias androiddebugkey \
+          -keypass android \
+          -keyalg RSA \
+          -keysize 2048 \
+          -validity 10000 \
+          -dname "CN=Debug, OU=Debug, O=Debug, L=Debug, ST=Debug, C=US"
+    
     - uses: gradle/actions/setup-gradle@v4
       with:
         gradle-version: "8.5"

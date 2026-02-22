@@ -34,6 +34,8 @@ android {
             isMinifyEnabled = true
             isShrinkResources = true
             proguardFiles("proguard-rules.pro")
+            // Sign with debug key (auto-uses ~/.android/debug.keystore)
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 
