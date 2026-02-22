@@ -48,7 +48,7 @@ class PlayerActivity : Activity() {
     // Stall detection
     private var lastPlaybackPosition: Long = 0
     private var stallDetectionCount = 0
-    private var isPlaying = false
+    private var isCurrentlyPlaying = false
     
     // Session stats
     private var sessionStartTime: Long = 0
@@ -223,7 +223,7 @@ class PlayerActivity : Activity() {
                     }
                     
                     override fun onIsPlayingChanged(playing: Boolean) {
-                        isPlaying = playing
+                        isCurrentlyPlaying = playing
                         if (playing) {
                             // Reset stall detection when playing
                             stallDetectionCount = 0
@@ -389,7 +389,7 @@ class PlayerActivity : Activity() {
     private fun startStallDetection() {
         stallCheckRunnable = object : Runnable {
             override fun run() {
-                if (!isPlaying) {
+                if (!isCurrentlyPlaying) {
                     mainHandler.postDelayed(this, STALL_CHECK_INTERVAL_MS)
                     return
                 }
@@ -435,7 +435,7 @@ class PlayerActivity : Activity() {
         cancelCounterReset()
         
         counterResetRunnable = Runnable {
-            if (isPlaying && (audioDiscontinuityCount > 0 || decodeErrorCount > 0 || networkErrorCount > 0)) {
+            if (isCurrentlyPlaying && (audioDiscontinuityCount > 0 || decodeErrorCount > 0 || networkErrorCount > 0)) {
                 Log.d(TAG, "Resetting error counters (stable playback)")
                 audioDiscontinuityCount = 0
                 decodeErrorCount = 0
