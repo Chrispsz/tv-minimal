@@ -57,10 +57,14 @@ class PlayerActivity : Activity() {
     
     private val mainHandler = Handler(Looper.getMainLooper())
     
-    // Memory monitoring
+    // Monitoring runnables
+    private var statsRunnable: Runnable? = null
     private var memoryCheckRunnable: Runnable? = null
     private var stallCheckRunnable: Runnable? = null
     private var counterResetRunnable: Runnable? = null
+    
+    // Performance tracking
+    private var totalDroppedFrames: Int = 0
 
     // ============================================================
     // CONFIGURATION - Sport Mode Pro
@@ -92,6 +96,9 @@ class PlayerActivity : Activity() {
         private const val MEMORY_CHECK_INTERVAL_MS = 30000L
         private const val MEMORY_WARNING_RATIO = 0.85
         private const val SESSION_RESTART_INTERVAL_MS = 9000000L  // 2.5h
+        
+        // Stats logging
+        private const val STATS_INTERVAL_MS = 30000L  // Log stats every 30s
         
         private const val TAG = "PlayerActivity"
     }
@@ -479,8 +486,74 @@ class PlayerActivity : Activity() {
     // MEMORY MONITORING
     // ============================================================
     private fun startMonitoring() {
+        startStatsLogging()
         startMemoryMonitoring()
         startStallDetection()
+    }
+    
+    // ============================================================
+    // STATS LOGGING - Logs detailed resource usage
+    // ============================================================
+    private fun startStatsLogging() {
+        statsRunnable = object : Runnable {
+            override fun run() {
+                logDetailedStats()
+                mainHandler.postDelayed(this, STATS_INTERVAL_MS)
+            }
+        }
+        mainHandler.postDelayed(statsRunnable!!, STATS_INTERVAL_MS)
+    }
+    
+    private fun logDetailedStats() {
+        val p = player ?: return
+        
+        // Memory info
+        val runtime = Runtime.getRuntime()
+        val usedMem = (runtime.totalMemory() - runtime.freeMemory()) / (1024 * 1024)
+        val maxMem = runtime.maxMemory() / (1024 * 1024)
+        val memPercent = ((runtime.totalMemory() - runtime.freeMemory()) * 100 / runtime.maxMemory())
+        
+        // System memory
+        val activityManager = getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memInfo = ActivityManager.MemoryInfo()
+        activityManager.getMemoryInfo(memInfo)
+        val availMem = memInfo.availMem / (1024 * 1024)
+        
+        // Player stats
+        val bufferMs = p.bufferedPosition - p.currentPosition
+        val bufferSec = bufferMs / 1000
+        val bitrateKbps = if (bufferMs > 0) (p.totalBufferedDuration / bufferMs) else 0
+        
+        // Video stats
+        val videoFormat = p.videoFormat
+        val videoWidth = videoFormat?.width ?: 0
+        val videoHeight = videoFormat?.height ?: 0
+        val videoCodec = videoFormat?.sampleMimeType?.replace("video/", "") ?: "?"
+        val frameRate = videoFormat?.frameRate?.toInt() ?: 0
+        
+        // Audio stats
+        val audioFormat = p.audioFormat
+        val audioCodec = audioFormat?.sampleMimeType?.replace("audio/", "") ?: "?"
+        val sampleRate = audioFormat?.sampleRate ?: 0
+        
+        // Playback state
+        val isBuffering = p.playbackState == ExoPlayer.STATE_BUFFERING
+        val isPlaying = p.isPlaying
+        
+        // Session time
+        val sessionMin = (System.currentTimeMillis() - sessionStartTime) / 60000
+        
+        // Log everything
+        Log.i(TAG, "╔═══════════════════════════════════════════════════════════╗")
+        Log.i(TAG, "║ RESOURCES @ ${sessionMin}min")
+        Log.i(TAG, "╠═══════════════════════════════════════════════════════════╣")
+        Log.i(TAG, "║ Memory: ${usedMem}MB/${maxMem}MB (${memPercent}%) | System: ${availMem}MB free")
+        Log.i(TAG, "║ Video: ${videoWidth}x${videoHeight} @ ${frameRate}fps | Codec: $videoCodec")
+        Log.i(TAG, "║ Audio: $audioCodec @ ${sampleRate}Hz")
+        Log.i(TAG, "║ Buffer: ${bufferSec}s | Bitrate: ~${bitrateKbps}kbps")
+        Log.i(TAG, "║ State: ${if (isPlaying) "PLAYING" else if (isBuffering) "BUFFERING" else "IDLE"}")
+        Log.i(TAG, "║ Stats: errors=$totalErrors recoveries=$totalRecoveries")
+        Log.i(TAG, "╚═══════════════════════════════════════════════════════════╝")
     }
     
     private fun startMemoryMonitoring() {
@@ -591,6 +664,7 @@ class PlayerActivity : Activity() {
         logSessionStats()
         
         // Cancel all runnables
+        statsRunnable?.let { mainHandler.removeCallbacks(it) }
         memoryCheckRunnable?.let { mainHandler.removeCallbacks(it) }
         stallCheckRunnable?.let { mainHandler.removeCallbacks(it) }
         counterResetRunnable?.let { mainHandler.removeCallbacks(it) }
